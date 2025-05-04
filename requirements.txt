@@ -6,7 +6,7 @@ pydantic==2.3.0
 python-binance==1.0.19
 ccxt==3.0.79
 pybit==5.0.0
-pandas==2.1.0
+pandas==1.5.3
 numpy==1.25.2
 loguru==0.7.0
 python-multipart==0.0.6
