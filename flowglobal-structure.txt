@@ -1,0 +1,65 @@
+# FlowGlobal V1 Kairos - Structure Complète
+
+## Structure du Projet GitHub
+
+FlowGlobal-V1-Kairos/
+├── .env.example                 # Template des variables d'environnement
+├── .gitignore                   # Configuration Git
+├── README.md                    # Documentation du projet
+├── requirements.txt             # Dépendances Python
+├── railway.toml                 # Configuration Railway
+├── Dockerfile                   # Configuration Docker
+│
+├── main.py                      # Point d'entrée de l'application
+├── config.py                    # Configuration centrale
+│
+├── core/                        # Modules core
+│   ├── __init__.py
+│   ├── flow_event_bus.py        # Bus d'événements central
+│   ├── flow_quantum_optimizer.py # Optimisation des stratégies
+│   ├── flow_risk_shield.py      # Gestion des risques
+│   ├── flow_vision_market.py    # Surveillance du marché
+│   ├── flow_self_optimizer.py   # Auto-optimisation
+│   ├── flow_horizon_scanner.py  # Scanner d'horizon (NOUVEAU)
+│   ├── flow_integrity_verifier.py # Vérification d'intégrité
+│   ├── flow_obfuscator.py       # Protection anti-espionnage
+│   ├── flow_vault.py            # Stockage sécurisé
+│   ├── flow_logs_manager.py     # Gestion des logs
+│   ├── flow_validator.py        # Validation des modules
+│   └── kairos_shadowmode.py     # Audit passif
+│
+├── modules/                     # Modules de trading
+│   ├── __init__.py
+│   ├── flow_bytebeat.py         # Scalping rapide
+│   ├── flow_sniper.py           # Entrées précises (NOUVEAU)
+│   └── flow_upspin.py           # Suivi de tendance (NOUVEAU)
+│
+├── routers/                     # API Routers
+│   ├── __init__.py
+│   ├── flowbytebeat_router.py   # API FlowByteBeat
+│   ├── flowsniper_router.py     # API FlowSniper
+│   └── flowupspin_router.py     # API FlowUpSpin
+│
+├── models/                      # Modèles de données
+│   ├── __init__.py
+│   └── core_models.py           # Modèles Pydantic (NOUVEAU)
+│
+├── utils/                       # Utilitaires
+│   ├── __init__.py
+│   └── helpers.py               # Fonctions utilitaires (NOUVEAU)
+│
+├── tests/                       # Tests
+│   ├── __init__.py
+│   ├── test_core/
+│   ├── test_modules/
+│   └── test_routers/
+│
+├── docs/                        # Documentation
+│   ├── API.md
+│   ├── ARCHITECTURE.md
+│   └── SETUP.md
+│
+├── logs/                        # Logs
+├── reports/                     # Rapports d'audit
+├── backups/                     # Sauvegardes
+└── sandbox_data/                # Données de test

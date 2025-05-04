@@ -1,0 +1,1132 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+FlowOrchestrator.py - Module de coordination centrale pour FlowGlobalDynamics™
+"""
+
+import logging
+import time
+import threading
+import json
+import os
+import asyncio
+from datetime import datetime, timedelta
+from typing import Dict, Any, List, Optional, Union, Set
+
+# Import local
+try:
+    from flow_eventbus import get_event_bus
+except ImportError:
+    # Support mode hors ligne
+    class DummyEventBus:
+        def publish(self, *args, **kwargs): pass
+        def subscribe(self, *args, **kwargs): pass
+        def unsubscribe(self, *args, **kwargs): pass
+    
+    def get_event_bus():
+        return DummyEventBus()
+
+class FlowOrchestrator:
+    """
+    Module de coordination centrale pour FlowGlobalDynamics™
+    """
+    
+    def __init__(self):
+        """Initialisation du FlowOrchestrator"""
+        self.running = False
+        self.threads = {}
+        self.logger = self._setup_logger()
+        self.event_bus = get_event_bus()
+        self.config = self._load_configuration()
+        
+        # État du système
+        self.modules_status = {}  # État des modules
+        self.active_tasks = []    # Tâches actives
+        self.system_resources = {} # Ressources système
+        self.event_queue = []     # File d'événements
+        self.priorities = {}      # Priorités des tâches
+        
+        # Métriques
+        self.performance_metrics = {}
+        self.resource_usage = {}
+        
+        # Variables de contrôle
+        self.last_resource_update = 0
+        self.last_priority_update = 0
+        self.last_status_report = 0
+        
+    def _setup_logger(self):
+        """Configuration du logger"""
+        logger = logging.getLogger("FlowOrchestrator")
+        logger.setLevel(logging.INFO)
+        if not logger.handlers:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            handler.setFormatter(formatter)
+            logger.addHandler(handler)
+        return logger
+    
+    def _load_configuration(self) -> Dict[str, Any]:
+        """
+        Charge la configuration de l'orchestrateur
+        
+        Returns:
+            Configuration de l'orchestrateur
+        """
+        # Configuration par défaut
+        default_config = {
+            "modules": {
+                "production": [
+                    "flow_bytebeat",
+                    "flow_sniper",
+                    "flow_horizon_scanner",
+                    "flow_risk_shield",
+                    "flow_vision_market"
+                ],
+                "sandbox": [
+                    "flow_market_predictor",
+                    "flow_gain_maximizer",
+                    "flow_maintenance_ai"
+                ],
+                "core": [
+                    "flow_event_bus",
+                    "flow_integrity_verifier",
+                    "flow_obfuscator",
+                    "flow_vault"
+                ]
+            },
+            "scheduling": {
+                "priority_levels": {
+                    "critical": 0,
+                    "high": 1,
+                    "medium": 2,
+                    "low": 3
+                },
+                "task_timeout_seconds": 60,
+                "max_concurrent_tasks": 20,
+                "queue_size": 100
+            },
+            "resources": {
+                "cpu": {
+                    "max_percent": 80,
+                    "warning_threshold": 70
+                },
+                "memory": {
+                    "max_percent": 80,
+                    "warning_threshold": 70
+                },
+                "network": {
+                    "max_bandwidth_mbps": 100,
+                    "warning_threshold_mbps": 80
+                }
+            },
+            "monitoring": {
+                "update_interval_seconds": 5,
+                "report_interval_seconds": 60,
+                "metrics_history_hours": 24
+            },
+            "recovery": {
+                "auto_restart": True,
+                "max_restart_attempts": 3,
+                "cooldown_period_seconds": 300
+            }
+        }
+        
+        try:
+            # Tenter de charger depuis un fichier (désactivé pour l'exemple)
+            # with open("orchestrator_config.json", "r") as f:
+            #     return json.load(f)
+            return default_config
+        except Exception as e:
+            self.logger.warning(f"Impossible de charger la configuration: {str(e)}. Utilisation des valeurs par défaut.")
+            return default_config
+    
+    def start(self):
+        """Démarrage de l'orchestrateur"""
+        if self.running:
+            self.logger.warning("FlowOrchestrator est déjà en cours d'exécution")
+            return
+            
+        self.running = True
+        self.logger.info("Démarrage du FlowOrchestrator...")
+        
+        # Initialiser l'état des modules
+        self._initialize_modules_status()
+        
+        # Démarrage des threads
+        self._start_orchestrator_threads()
+        
+        # Enregistrer les gestionnaires d'événements
+        self._register_events()
+        
+        self.logger.info("FlowOrchestrator démarré avec succès")
+        
+    def stop(self):
+        """Arrêt de l'orchestrateur"""
+        if not self.running:
+            self.logger.warning("FlowOrchestrator n'est pas en cours d'exécution")
+            return
+            
+        self.running = False
+        self.logger.info("Arrêt du FlowOrchestrator...")
+        
+        # Arrêter les threads
+        for thread_name, thread in self.threads.items():
+            if thread and thread.is_alive():
+                thread.join(timeout=2.0)
+                self.logger.debug(f"Thread {thread_name} arrêté")
+        
+        # Désenregistrer les gestionnaires d'événements
+        self._unregister_events()
+        
+        self.logger.info("FlowOrchestrator arrêté avec succès")
+    
+    def _initialize_modules_status(self):
+        """Initialise l'état des modules"""
+        # Récupérer la liste des modules
+        all_modules = []
+        for category, modules in self.config["modules"].items():
+            all_modules.extend(modules)
+        
+        # Initialiser l'état pour chaque module
+        for module in all_modules:
+            self.modules_status[module] = {
+                "status": "unknown",
+                "last_heartbeat": 0,
+                "resource_usage": {
+                    "cpu": 0.0,
+                    "memory": 0.0,
+                    "disk": 0.0,
+                    "network": 0.0
+                },
+                "performance": {},
+                "errors": [],
+                "restart_count": 0,
+                "last_restart": 0
+            }
+    
+    def _start_orchestrator_threads(self):
+        """Démarre les threads de l'orchestrateur"""
+        # Thread de surveillance des ressources
+        self.threads["resource_monitor"] = threading.Thread(
+            target=self._resource_monitor_loop, 
+            daemon=True
+        )
+        self.threads["resource_monitor"].start()
+        
+        # Thread de planification des tâches
+        self.threads["task_scheduler"] = threading.Thread(
+            target=self._task_scheduler_loop, 
+            daemon=True
+        )
+        self.threads["task_scheduler"].start()
+        
+        # Thread de surveillance des modules
+        self.threads["module_monitor"] = threading.Thread(
+            target=self._module_monitor_loop, 
+            daemon=True
+        )
+        self.threads["module_monitor"].start()
+        
+        # Thread de rapport d'état
+        self.threads["status_reporter"] = threading.Thread(
+            target=self._status_reporter_loop, 
+            daemon=True
+        )
+        self.threads["status_reporter"].start()
+    
+    def _register_events(self):
+        """Enregistrement des abonnements aux événements"""
+        # S'abonner aux battements de cœur des modules
+        self.event_bus.subscribe("module_heartbeat", self._handle_module_heartbeat)
+        
+        # S'abonner aux métriques de performance
+        self.event_bus.subscribe("performance_metrics", self._handle_performance_metrics)
+        
+        # S'abonner aux rapports d'erreurs
+        self.event_bus.subscribe("error_report", self._handle_error_report)
+        
+        # S'abonner aux demandes de ressources
+        self.event_bus.subscribe("resource_request", self._handle_resource_request)
+        
+        # S'abonner aux demandes de tâches
+        self.event_bus.subscribe("task_request", self._handle_task_request)
+        
+        # S'abonner aux résultats de tâches
+        self.event_bus.subscribe("task_result", self._handle_task_result)
+        
+        # S'abonner aux demandes de statut système
+        self.event_bus.subscribe("system_status_request", self._handle_system_status_request)
+    
+    def _unregister_events(self):
+        """Désenregistrement des abonnements aux événements"""
+        # Se désabonner des battements de cœur des modules
+        self.event_bus.unsubscribe("module_heartbeat", self._handle_module_heartbeat)
+        
+        # Se désabonner des métriques de performance
+        self.event_bus.unsubscribe("performance_metrics", self._handle_performance_metrics)
+        
+        # Se désabonner des rapports d'erreurs
+        self.event_bus.unsubscribe("error_report", self._handle_error_report)
+        
+        # Se désabonner des demandes de ressources
+        self.event_bus.unsubscribe("resource_request", self._handle_resource_request)
+        
+        # Se désabonner des demandes de tâches
+        self.event_bus.unsubscribe("task_request", self._handle_task_request)
+        
+        # Se désabonner des résultats de tâches
+        self.event_bus.unsubscribe("task_result", self._handle_task_result)
+        
+        # Se désabonner des demandes de statut système
+        self.event_bus.unsubscribe("system_status_request", self._handle_system_status_request)
+    
+    def _resource_monitor_loop(self):
+        """Boucle de surveillance des ressources système"""
+        self.logger.info("Démarrage de la surveillance des ressources...")
+        
+        while self.running:
+            try:
+                # Mettre à jour les ressources système
+                self._update_system_resources()
+                
+                # Vérifier les limites de ressources
+                self._check_resource_limits()
+                
+                # Attendre l'intervalle de mise à jour
+                time.sleep(self.config["monitoring"]["update_interval_seconds"])
+            except Exception as e:
+                self.logger.error(f"Erreur dans la surveillance des ressources: {str(e)}")
+                time.sleep(10)  # Attendre en cas d'erreur
+    
+    def _task_scheduler_loop(self):
+        """Boucle de planification des tâches"""
+        self.logger.info("Démarrage du planificateur de tâches...")
+        
+        while self.running:
+            try:
+                # Traiter la file d'attente des tâches
+                self._process_task_queue()
+                
+                # Mettre à jour les priorités
+                current_time = time.time()
+                if current_time - self.last_priority_update > 10:  # Toutes les 10 secondes
+                    self._update_task_priorities()
+                    self.last_priority_update = current_time
+                
+                # Attendre un court instant
+                time.sleep(0.1)
+            except Exception as e:
+                self.logger.error(f"Erreur dans le planificateur de tâches: {str(e)}")
+                time.sleep(5)  # Attendre en cas d'erreur
+    
+    def _module_monitor_loop(self):
+        """Boucle de surveillance des modules"""
+        self.logger.info("Démarrage de la surveillance des modules...")
+        
+        while self.running:
+            try:
+                # Vérifier l'état des modules
+                self._check_modules_status()
+                
+                # Attendre l'intervalle de mise à jour
+                time.sleep(5)  # Vérification toutes les 5 secondes
+            except Exception as e:
+                self.logger.error(f"Erreur dans la surveillance des modules: {str(e)}")
+                time.sleep(10)  # Attendre en cas d'erreur
+    
+    def _status_reporter_loop(self):
+        """Boucle de rapport d'état"""
+        self.logger.info("Démarrage du rapporteur d'état...")
+        
+        while self.running:
+            try:
+                # Générer et publier un rapport d'état
+                current_time = time.time()
+                if current_time - self.last_status_report > self.config["monitoring"]["report_interval_seconds"]:
+                    self._publish_status_report()
+                    self.last_status_report = current_time
+                
+                # Attendre
+                time.sleep(10)
+            except Exception as e:
+                self.logger.error(f"Erreur dans le rapporteur d'état: {str(e)}")
+                time.sleep(30)  # Attendre en cas d'erreur
+    
+    def _update_system_resources(self):
+        """Met à jour les ressources système"""
+        # Dans un système réel, utiliser psutil ou une bibliothèque similaire
+        # Simplification pour l'exemple
+        
+        # Simuler des métriques système
+        import random
+        
+        self.system_resources = {
+            "cpu": {
+                "percent": random.uniform(20, 60),
+                "cores": 8,
+                "frequency": 3.2
+            },
+            "memory": {
+                "percent": random.uniform(30, 70),
+                "total": 16384,  # MB
+                "used": random.uniform(4000, 10000)  # MB
+            },
+            "disk": {
+                "percent": random.uniform(20, 50),
+                "total": 512000,  # MB
+                "used": random.uniform(100000, 250000)  # MB
+            },
+            "network": {
+                "rx_bytes": random.uniform(100000, 500000),  # Bytes
+                "tx_bytes": random.uniform(50000, 250000),  # Bytes
+                "connections": random.randint(10, 50)
+            },
+            "timestamp": time.time()
+        }
+        
+        self.last_resource_update = time.time()
+    
+    def _check_resource_limits(self):
+        """Vérifie les limites des ressources système"""
+        if not self.system_resources:
+            return
+        
+        # Vérifier l'utilisation du CPU
+        cpu_percent = self.system_resources.get("cpu", {}).get("percent", 0)
+        cpu_warning = self.config["resources"]["cpu"]["warning_threshold"]
+        cpu_max = self.config["resources"]["cpu"]["max_percent"]
+        
+        if cpu_percent > cpu_max:
+            self.logger.warning(f"Utilisation CPU critique: {cpu_percent:.1f}% > {cpu_max}%")
+            self._handle_resource_overload("cpu", cpu_percent)
+        elif cpu_percent > cpu_warning:
+            self.logger.info(f"Utilisation CPU élevée: {cpu_percent:.1f}% > {cpu_warning}%")
+        
+        # Vérifier l'utilisation de la mémoire
+        mem_percent = self.system_resources.get("memory", {}).get("percent", 0)
+        mem_warning = self.config["resources"]["memory"]["warning_threshold"]
+        mem_max = self.config["resources"]["memory"]["max_percent"]
+        
+        if mem_percent > mem_max:
+            self.logger.warning(f"Utilisation mémoire critique: {mem_percent:.1f}% > {mem_max}%")
+            self._handle_resource_overload("memory", mem_percent)
+        elif mem_percent > mem_warning:
+            self.logger.info(f"Utilisation mémoire élevée: {mem_percent:.1f}% > {mem_warning}%")
+    
+    def _handle_resource_overload(self, resource_type: str, value: float):
+        """
+        Gère une surcharge de ressource
+        
+        Args:
+            resource_type: Type de ressource (cpu, memory, etc.)
+            value: Valeur actuelle
+        """
+        # Publier une alerte
+        self.event_bus.publish("system_alert", {
+            "type": "resource_overload",
+            "resource": resource_type,
+            "value": value,
+            "threshold": self.config["resources"][resource_type]["max_percent"],
+            "timestamp": time.time()
+        })
+        
+        # Prendre des mesures pour réduire la charge
+        self._reduce_system_load(resource_type)
+    
+    def _reduce_system_load(self, resource_type: str):
+        """
+        Réduit la charge du système
+        
+        Args:
+            resource_type: Type de ressource à réduire
+        """
+        # Identifier les modules consommant le plus de ressources
+        resource_usage = [(module, status["resource_usage"][resource_type]) 
+                         for module, status in self.modules_status.items()
+                         if status["status"] == "running"]
+        
+        # Trier par consommation décroissante
+        resource_usage.sort(key=lambda x: x[1], reverse=True)
+        
+        # Sélectionner les modules non critiques avec la plus haute consommation
+        non_critical_modules = []
+        
+        for module, usage in resource_usage:
+            # Vérifier si le module est critique
+            if module in self.config["modules"]["core"]:
+                continue
+            
+            # Ajouter à la liste
+            non_critical_modules.append((module, usage))
+            
+            # Limiter à 2 modules
+            if len(non_critical_modules) >= 2:
+                break
+        
+        # Réduire la charge des modules identifiés
+        for module, usage in non_critical_modules:
+            self.logger.info(f"Réduction de charge du module {module} ({usage:.1f}% {resource_type})")
+            
+            # Publier une demande de réduction
+            self.event_bus.publish("resource_adjustment", {
+                "module": module,
+                "action": "reduce_load",
+                "resource": resource_type,
+                "current_usage": usage,
+                "target_reduction": 0.3,  # Réduire de 30%
+                "timestamp": time.time()
+            })
+    
+    def _process_task_queue(self):
+        """Traite la file d'attente des tâches"""
+        if not self.event_queue:
+            return
+        
+        # Vérifier le nombre de tâches actives
+        active_count = len(self.active_tasks)
+        max_tasks = self.config["scheduling"]["max_concurrent_tasks"]
+        
+        if active_count >= max_tasks:
+            return
+        
+        # Trier la file par priorité
+        self.event_queue.sort(key=lambda x: x.get("priority", 2))
+        
+        # Traiter les tâches disponibles
+        slots_available = max_tasks - active_count
+        tasks_to_process = min(slots_available, len(self.event_queue))
+        
+        for _ in range(tasks_to_process):
+            task = self.event_queue.pop(0)
+            self._start_task(task)
+    
+    def _start_task(self, task: Dict[str, Any]):
+        """
+        Démarre une tâche
+        
+        Args:
+            task: Tâche à démarrer
+        """
+        # Ajouter un identifiant si absent
+        if "id" not in task:
+            task["id"] = f"task_{int(time.time())}_{len(self.active_tasks)}"
+        
+        # Ajouter des horodatages
+        task["queued_at"] = task.get("queued_at", time.time())
+        task["started_at"] = time.time()
+        
+        # Ajouter aux tâches actives
+        self.active_tasks.append(task)
+        
+        # Publier un événement de démarrage de tâche
+        self.event_bus.publish(task["type"], {
+            **task,
+            "status": "started",
+            "orchestrator_id": task["id"]
+        })
+        
+        self.logger.debug(f"Tâche démarrée: {task['id']} ({task['type']})")
+        
+        # Planifier une vérification de timeout
+        timeout = task.get("timeout", self.config["scheduling"]["task_timeout_seconds"])
+        threading.Timer(timeout, self._check_task_timeout, args=[task["id"]]).start()
+    
+    def _check_task_timeout(self, task_id: str):
+        """
+        Vérifie si une tâche a expiré
+        
+        Args:
+            task_id: Identifiant de la tâche
+        """
+        # Rechercher la tâche dans les tâches actives
+        for i, task in enumerate(self.active_tasks):
+            if task["id"] == task_id:
+                # Tâche trouvée, vérifier si elle est expirée
+                elapsed = time.time() - task["started_at"]
+                timeout = task.get("timeout", self.config["scheduling"]["task_timeout_seconds"])
+                
+                if elapsed > timeout:
+                    # Tâche expirée
+                    self.logger.warning(f"Tâche expirée: {task_id} ({task['type']}) après {elapsed:.1f}s")
+                    
+                    # Supprimer des tâches actives
+                    self.active_tasks.pop(i)
+                    
+                    # Publier un événement de timeout
+                    self.event_bus.publish("task_timeout", {
+                        "task_id": task_id,
+                        "task_type": task["type"],
+                        "elapsed_seconds": elapsed,
+                        "timeout_seconds": timeout,
+                        "timestamp": time.time()
+                    })
+                    
+                    # Signaler au module
+                    if "module" in task:
+                        self.event_bus.publish(f"{task['module']}_task_timeout", {
+                            "task_id": task_id,
+                            "task_type": task["type"],
+                            "elapsed_seconds": elapsed,
+                            "timestamp": time.time()
+                        })
+                    
+                    break
+    
+    def _update_task_priorities(self):
+        """Met à jour les priorités des tâches"""
+        # Mettre à jour les priorités dans la file d'attente
+        for task in self.event_queue:
+            # Si la tâche a une règle de priorité dynamique
+            if "dynamic_priority" in task:
+                # Calculer une nouvelle priorité basée sur l'attente
+                wait_time = time.time() - task.get("queued_at", time.time())
+                
+                # Plus le temps d'attente est long, plus la priorité augmente
+                if wait_time > 60:  # Après 1 minute
+                    task["priority"] = max(0, task.get("priority", 2) - 1)
+        
+        # Mettre à jour les priorités globales
+        self._update_module_priorities()
+    
+    def _update_module_priorities(self):
+        """Met à jour les priorités des modules"""
+        # Dans un système réel, ajuster les priorités en fonction de:
+        # - L'importance stratégique actuelle
+        # - Les performances récentes
+        # - Les opportunités de marché
+        # - La consommation de ressources
+        
+        # Simplification pour l'exemple
+        self.priorities = {
+            "flow_bytebeat": 0,  # Priorité critique pour le scalping haute fréquence
+            "flow_risk_shield": 0,  # Priorité critique pour la gestion des risques
+            "flow_sniper": 1,
+            "flow_horizon_scanner": 1,
+            "flow_vision_market": 1,
+            "flow_market_predictor": 2,
+            "flow_gain_maximizer": 2,
+            "flow_maintenance_ai": 3
+        }
+    
+    def _check_modules_status(self):
+        """Vérifie l'état des modules"""
+        current_time = time.time()
+        
+        # Vérifier chaque module
+        for module, status in self.modules_status.items():
+            # Vérifier si le module est actif
+            if status["status"] == "running":
+                # Vérifier le dernier heartbeat
+                last_heartbeat = status["last_heartbeat"]
+                
+                # Considérer inactif après 30 secondes sans heartbeat
+                if current_time - last_heartbeat > 30:
+                    self.logger.warning(f"Module {module} inactif (dernier heartbeat il y a {current_time - last_heartbeat:.1f}s)")
+                    
+                    # Mettre à jour le statut
+                    status["status"] = "inactive"
+                    
+                    # Publier un changement d'état
+                    self.event_bus.publish("module_status_change", {
+                        "module": module,
+                        "status": "inactive",
+                        "previous_status": "running",
+                        "reason": "heartbeat_timeout",
+                        "timestamp": current_time
+                    })
+                    
+                    # Vérifier si redémarrage automatique
+                    if self.config["recovery"]["auto_restart"]:
+                        self._try_restart_module(module)
+    
+    def _try_restart_module(self, module_name: str):
+        """
+        Tente de redémarrer un module
+        
+        Args:
+            module_name: Nom du module à redémarrer
+        """
+        status = self.modules_status[module_name]
+        
+        # Vérifier le nombre de tentatives
+        if status["restart_count"] >= self.config["recovery"]["max_restart_attempts"]:
+            # Trop de tentatives
+            self.logger.error(f"Module {module_name} non redémarré: nombre maximum de tentatives atteint ({status['restart_count']})")
+            
+            # Mettre à jour le statut
+            status["status"] = "failed"
+            
+            # Publier une alerte
+            self.event_bus.publish("system_alert", {
+                "type": "module_restart_failed",
+                "module": module_name,
+                "restart_count": status["restart_count"],
+                "max_attempts": self.config["recovery"]["max_restart_attempts"],
+                "timestamp": time.time()
+            })
+            
+            return
+        
+        # Vérifier le temps écoulé depuis le dernier redémarrage
+        current_time = time.time()
+        cooldown = self.config["recovery"]["cooldown_period_seconds"]
+        
+        if current_time - status["last_restart"] < cooldown:
+            # Période de refroidissement
+            self.logger.info(f"Module {module_name} en période de refroidissement, redémarrage reporté")
+            return
+        
+        # Incrémenter le compteur de redémarrages
+        status["restart_count"] += 1
+        status["last_restart"] = current_time
+        
+        # Mettre à jour le statut
+        status["status"] = "restarting"
+        
+        # Publier une demande de redémarrage
+        self.logger.info(f"Demande de redémarrage du module {module_name} (tentative {status['restart_count']})")
+        
+        self.event_bus.publish("module_restart", {
+            "module": module_name,
+            "restart_count": status["restart_count"],
+            "timestamp": current_time
+        })
+    
+    def _publish_status_report(self):
+        """Publie un rapport d'état du système"""
+        # Collecter les données d'état
+        active_modules = [m for m, s in self.modules_status.items() if s["status"] == "running"]
+        inactive_modules = [m for m, s in self.modules_status.items() if s["status"] != "running"]
+        
+        # Collecter les métriques de ressources
+        cpu_percent = self.system_resources.get("cpu", {}).get("percent", 0)
+        memory_percent = self.system_resources.get("memory", {}).get("percent", 0)
+        disk_percent = self.system_resources.get("disk", {}).get("percent", 0)
+        
+        # Créer le rapport
+        report = {
+            "timestamp": time.time(),
+            "system_status": "healthy" if len(inactive_modules) == 0 else "degraded",
+            "modules": {
+                "active_count": len(active_modules),
+                "inactive_count": len(inactive_modules),
+                "active": active_modules,
+                "inactive": inactive_modules
+            },
+            "resources": {
+                "cpu_percent": cpu_percent,
+                "memory_percent": memory_percent,
+                "disk_percent": disk_percent
+            },
+            "tasks": {
+                "active_count": len(self.active_tasks),
+                "queued_count": len(self.event_queue)
+            },
+            "performance": self.performance_metrics
+        }
+        
+        # Publier le rapport
+        self.event_bus.publish("system_status_report", report)
+        
+        self.logger.info(f"Rapport d'état publié: {len(active_modules)} modules actifs, {len(inactive_modules)} inactifs, {len(self.event_queue)} tâches en attente")
+    
+    def _handle_module_heartbeat(self, data: Dict[str, Any]):
+        """
+        Gestionnaire pour les battements de cœur des modules
+        
+        Args:
+            data: Données du battement de cœur
+        """
+        # Extraire le nom du module
+        module = data.get("module")
+        
+        if not module:
+            return
+        
+        # Mettre à jour le statut du module
+        if module in self.modules_status:
+            self.modules_status[module]["last_heartbeat"] = time.time()
+            
+            # Mettre à jour le statut si nécessaire
+            if self.modules_status[module]["status"] != "running":
+                self.modules_status[module]["status"] = "running"
+                self.modules_status[module]["restart_count"] = 0
+                
+                # Publier un changement d'état
+                self.event_bus.publish("module_status_change", {
+                    "module": module,
+                    "status": "running",
+                    "previous_status": self.modules_status[module]["status"],
+                    "timestamp": time.time()
+                })
+        else:
+            # Nouveau module
+            self.modules_status[module] = {
+                "status": "running",
+                "last_heartbeat": time.time(),
+                "resource_usage": {
+                    "cpu": 0.0,
+                    "memory": 0.0,
+                    "disk": 0.0,
+                    "network": 0.0
+                },
+                "performance": {},
+                "errors": [],
+                "restart_count": 0,
+                "last_restart": 0
+            }
+        
+        # Mettre à jour l'utilisation des ressources si présente
+        if "resource_usage" in data:
+            self.modules_status[module]["resource_usage"] = data["resource_usage"]
+    
+    def _handle_performance_metrics(self, data: Dict[str, Any]):
+        """
+        Gestionnaire pour les métriques de performance
+        
+        Args:
+            data: Métriques de performance
+        """
+        # Extraire le module si présent
+        module = data.get("module")
+        
+        if module and module in self.modules_status:
+            # Mettre à jour les métriques du module
+            self.modules_status[module]["performance"] = data.get("metrics", {})
+        
+        # Collecter les métriques globales
+        metrics = data.get("metrics", {})
+        
+        if metrics:
+            # Mettre à jour les métriques globales
+            for key, value in metrics.items():
+                if key not in self.performance_metrics:
+                    self.performance_metrics[key] = []
+                
+                # Garder un historique limité
+                max_history = 100
+                if len(self.performance_metrics[key]) >= max_history:
+                    self.performance_metrics[key] = self.performance_metrics[key][1:]
+                
+                self.performance_metrics[key].append({
+                    "value": value,
+                    "timestamp": time.time()
+                })
+    
+    def _handle_error_report(self, data: Dict[str, Any]):
+        """
+        Gestionnaire pour les rapports d'erreurs
+        
+        Args:
+            data: Rapport d'erreur
+        """
+        # Extraire les informations
+        module = data.get("module")
+        error_type = data.get("type", "unknown")
+        message = data.get("message", "")
+        severity = data.get("severity", "error")
+        
+        if not module:
+            return
+        
+        # Enregistrer l'erreur
+        if module in self.modules_status:
+            # Ajouter à la liste des erreurs du module
+            self.modules_status[module]["errors"].append({
+                "type": error_type,
+                "message": message,
+                "severity": severity,
+                "timestamp": time.time()
+            })
+            
+            # Limiter la taille de la liste
+            max_errors = 20
+            if len(self.modules_status[module]["errors"]) > max_errors:
+                self.modules_status[module]["errors"] = self.modules_status[module]["errors"][-max_errors:]
+        
+        # Traiter les erreurs graves
+        if severity == "critical":
+            self.logger.error(f"Erreur critique dans {module}: {message}")
+            
+            # Publier une alerte système
+            self.event_bus.publish("system_alert", {
+                "type": "critical_error",
+                "module": module,
+                "error_type": error_type,
+                "message": message,
+                "timestamp": time.time()
+            })
+            
+            # Vérifier si le module est en production
+            if module in self.config["modules"]["production"]:
+                # Tenter un redémarrage du module
+                self._try_restart_module(module)
+    
+    def _handle_resource_request(self, data: Dict[str, Any]):
+        """
+        Gestionnaire pour les demandes de ressources
+        
+        Args:
+            data: Demande de ressources
+        """
+        # Extraire les informations
+        module = data.get("module")
+        resource_type = data.get("resource", "cpu")
+        amount = data.get("amount", 0)
+        request_id = data.get("request_id", f"req_{int(time.time())}")
+        priority = data.get("priority", 2)
+        
+        if not module:
+            return
+        
+        # Vérifier la disponibilité des ressources
+        available = self._check_resource_availability(resource_type, amount)
+        
+        # Répondre à la demande
+        self.event_bus.publish("resource_response", {
+            "request_id": request_id,
+            "module": module,
+            "resource": resource_type,
+            "amount": amount,
+            "granted": available,
+            "timestamp": time.time()
+        })
+        
+        # Si accordé, réserver les ressources
+        if available:
+            self.logger.debug(f"Ressources accordées: {amount} {resource_type} pour {module}")
+        else:
+            self.logger.info(f"Ressources refusées: {amount} {resource_type} pour {module} (indisponible)")
+            
+            # Ajouter à la file d'attente si haute priorité
+            if priority <= 1:
+                # Ajouter à la file d'attente pour réessai plus tard
+                self.event_queue.append({
+                    "type": "resource_request",
+                    "module": module,
+                    "resource": resource_type,
+                    "amount": amount,
+                    "request_id": request_id,
+                    "priority": priority,
+                    "queued_at": time.time()
+                })
+    
+    def _check_resource_availability(self, resource_type: str, amount: float) -> bool:
+        """
+        Vérifie la disponibilité des ressources
+        
+        Args:
+            resource_type: Type de ressource
+            amount: Quantité demandée
+            
+        Returns:
+            True si disponible, False sinon
+        """
+        # Vérifier le type de ressource
+        if resource_type == "cpu":
+            current = self.system_resources.get("cpu", {}).get("percent", 0)
+            max_allowed = self.config["resources"]["cpu"]["max_percent"]
+            
+            return (current + amount) <= max_allowed
+        
+        elif resource_type == "memory":
+            current = self.system_resources.get("memory", {}).get("percent", 0)
+            max_allowed = self.config["resources"]["memory"]["max_percent"]
+            
+            return (current + amount) <= max_allowed
+        
+        elif resource_type == "network":
+            current_mbps = (
+                self.system_resources.get("network", {}).get("rx_bytes", 0) +
+                self.system_resources.get("network", {}).get("tx_bytes", 0)
+            ) / 1024 / 1024  # Convertir en MB/s
+            
+            max_allowed = self.config["resources"]["network"]["max_bandwidth_mbps"]
+            
+            return (current_mbps + amount) <= max_allowed
+        
+        # Par défaut, autoriser
+        return True
+    
+    def _handle_task_request(self, data: Dict[str, Any]):
+        """
+        Gestionnaire pour les demandes de tâches
+        
+        Args:
+            data: Demande de tâche
+        """
+        # Vérifier si la file d'attente est pleine
+        if len(self.event_queue) >= self.config["scheduling"]["queue_size"]:
+            # File pleine, refuser la tâche
+            self.logger.warning(f"File d'attente pleine, tâche refusée: {data.get('type', 'unknown')}")
+            
+            # Notifier le demandeur
+            request_id = data.get("request_id", "unknown")
+            module = data.get("module")
+            
+            if module:
+                self.event_bus.publish(f"{module}_task_response", {
+                    "request_id": request_id,
+                    "status": "rejected",
+                    "reason": "queue_full",
+                    "timestamp": time.time()
+                })
+            
+            return
+        
+        # Extraire la priorité de la tâche
+        module = data.get("module")
+        task_type = data.get("type", "unknown")
+        
+        # Déterminer la priorité
+        if "priority" in data:
+            priority = data["priority"]
+        elif module in self.priorities:
+            priority = self.priorities[module]
+        else:
+            priority = 2  # Priorité moyenne par défaut
+        
+        # Créer une entrée de file d'attente
+        queue_entry = {
+            **data,
+            "priority": priority,
+            "queued_at": time.time()
+        }
+        
+        # Ajouter à la file d'attente
+        self.event_queue.append(queue_entry)
+        
+        self.logger.debug(f"Tâche ajoutée à la file: {task_type} (priorité: {priority})")
+        
+        # Notifier l'acceptation
+        request_id = data.get("request_id", "unknown")
+        
+        if module:
+            self.event_bus.publish(f"{module}_task_response", {
+                "request_id": request_id,
+                "status": "queued",
+                "position": len(self.event_queue),
+                "timestamp": time.time()
+            })
+    
+    def _handle_task_result(self, data: Dict[str, Any]):
+        """
+        Gestionnaire pour les résultats de tâches
+        
+        Args:
+            data: Résultat de tâche
+        """
+        # Extraire l'ID de la tâche
+        task_id = data.get("task_id")
+        
+        if not task_id:
+            return
+        
+        # Rechercher la tâche dans les tâches actives
+        for i, task in enumerate(self.active_tasks):
+            if task["id"] == task_id:
+                # Tâche trouvée
+                completed_task = self.active_tasks.pop(i)
+                
+                # Calculer le temps d'exécution
+                execution_time = time.time() - completed_task.get("started_at", time.time())
+                
+                self.logger.debug(f"Tâche terminée: {task_id} ({completed_task.get('type', 'unknown')}) en {execution_time:.2f}s")
+                
+                # Collecter des statistiques de performance
+                module = completed_task.get("module")
+                
+                if module and module in self.modules_status:
+                    # Mettre à jour les statistiques du module
+                    if "task_stats" not in self.modules_status[module]:
+                        self.modules_status[module]["task_stats"] = {}
+                    
+                    task_type = completed_task.get("type", "unknown")
+                    
+                    if task_type not in self.modules_status[module]["task_stats"]:
+                        self.modules_status[module]["task_stats"][task_type] = {
+                            "count": 0,
+                            "total_time": 0,
+                            "avg_time": 0
+                        }
+                    
+                    stats = self.modules_status[module]["task_stats"][task_type]
+                    stats["count"] += 1
+                    stats["total_time"] += execution_time
+                    stats["avg_time"] = stats["total_time"] / stats["count"]
+                
+                break
+    
+    def _handle_system_status_request(self, data: Dict[str, Any]):
+        """
+        Gestionnaire pour les demandes de statut système
+        
+        Args:
+            data: Demande de statut
+        """
+        # Générer un rapport d'état
+        status_report = self._generate_status_report()
+        
+        # Répondre à la demande
+        request_id = data.get("request_id", "unknown")
+        
+        self.event_bus.publish("system_status_response", {
+            "request_id": request_id,
+            "report": status_report,
+            "timestamp": time.time()
+        })
+    
+    def _generate_status_report(self) -> Dict[str, Any]:
+        """
+        Génère un rapport d'état du système
+        
+        Returns:
+            Rapport d'état
+        """
+        # Compter les modules par statut
+        status_counts = {}
+        for module, status in self.modules_status.items():
+            module_status = status["status"]
+            
+            if module_status not in status_counts:
+                status_counts[module_status] = 0
+            
+            status_counts[module_status] += 1
+        
+        # Déterminer le statut global
+        global_status = "healthy"
+        
+        if status_counts.get("failed", 0) > 0:
+            global_status = "critical"
+        elif status_counts.get("inactive", 0) > 0 or status_counts.get("restarting", 0) > 0:
+            global_status = "degraded"
+        
+        # Créer le rapport
+        return {
+            "global_status": global_status,
+            "modules": {
+                "counts": status_counts,
+                "details": {module: {"status": status["status"]} for module, status in self.modules_status.items()}
+            },
+            "resources": {
+                "cpu": self.system_resources.get("cpu", {}).get("percent", 0),
+                "memory": self.system_resources.get("memory", {}).get("percent", 0),
+                "disk": self.system_resources.get("disk", {}).get("percent", 0)
+            },
+            "tasks": {
+                "active": len(self.active_tasks),
+                "queued": len(self.event_queue)
+            },
+            "timestamp": time.time()
+        }
+
+if __name__ == "__main__":
+    # Test de l'orchestrateur
+    orchestrator = FlowOrchestrator()
+    orchestrator.start()
+    
+    time.sleep(10)  # Laisser l'orchestrateur fonctionner un moment
+    
+    orchestrator.stop()

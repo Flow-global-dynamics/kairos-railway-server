@@ -1,0 +1,434 @@
+def _update_performance_metrics(self):
+    """Met à jour les métriques de performance"""
+    self.logger.debug("Mise à jour des métriques de performance...")
+    
+    # Dans un système réel, calculer les métriques à partir de l'historique des trades
+    # Simulation pour l'exemple
+    
+    # Récupérer les trades récents
+    recent_trades = self._get_recent_trades()
+    
+    if not recent_trades:
+        return
+    
+    # Calculer les métriques
+    wins = [t for t in recent_trades if t.get("profit", 0) > 0]
+    losses = [t for t in recent_trades if t.get("profit", 0) <= 0]
+    
+    total_trades = len(recent_trades)
+    win_count = len(wins)
+    
+    # Taux de victoire
+    win_rate = win_count / total_trades if total_trades > 0 else 0
+    
+    # Gain moyen
+    avg_win = sum(t.get("profit", 0) for t in wins) / win_count if win_count > 0 else 0
+    
+    # Perte moyenne
+    loss_count = len(losses)
+    avg_loss = sum(abs(t.get("profit", 0)) for t in losses) / loss_count if loss_count > 0 else 0
+    
+    # Profit total
+    total_profit = sum(t.get("profit", 0) for t in recent_trades)
+    
+    # Facteur de profit
+    gross_profit = sum(t.get("profit", 0) for t in wins)
+    gross_loss = sum(abs(t.get("profit", 0)) for t in losses)
+    profit_factor = gross_profit / gross_loss if gross_loss > 0 else 0
+    
+    # Mettre à jour les métriques
+    self.performance_metrics = {
+        "win_rate": win_rate,
+        "profit_factor": profit_factor,
+        "avg_win": avg_win,
+        "avg_loss": avg_loss,
+        "max_drawdown": self._calculate_max_drawdown(recent_trades),
+        "sharpe_ratio": self._calculate_sharpe_ratio(recent_trades),
+        "trades_count": total_trades,
+        "consecutive_wins": self._calculate_consecutive_wins(recent_trades),
+        "consecutive_losses": self._calculate_consecutive_losses(recent_trades),
+        "total_profit": total_profit,
+        "total_fees": sum(t.get("fees", 0) for t in recent_trades),
+        "last_update": time.time()
+    }
+    
+    # Publier les métriques
+    self.event_bus.publish("performance_metrics", {
+        "metrics": self.performance_metrics,
+        "timestamp": time.time()
+    })
+
+def _calculate_max_drawdown(self, trades: List[Dict[str, Any]]) -> float:
+    """
+    Calcule le drawdown maximum
+    
+    Args:
+        trades: Liste des trades
+        
+    Returns:
+        Drawdown maximum en pourcentage
+    """
+    if not trades:
+        return 0.0
+        
+    # Tri des trades par date
+    sorted_trades = sorted(trades, key=lambda x: x.get("closed_at", 0))
+    
+    # Calcul de l'équité cumulée
+    equity = []
+    cumulative = 0
+    
+    for trade in sorted_trades:
+        profit = trade.get("profit", 0)
+        cumulative += profit
+        equity.append(cumulative)
+    
+    # Calcul du drawdown maximum
+    max_dd = 0.0
+    peak = equity[0]
+    
+    for value in equity:
+        if value > peak:
+            peak = value
+        else:
+            dd = (peak - value) / peak if peak > 0 else 0
+            max_dd = max(max_dd, dd)
+    
+    return max_dd
+
+def _calculate_sharpe_ratio(self, trades: List[Dict[str, Any]]) -> float:
+    """
+    Calcule le ratio de Sharpe
+    
+    Args:
+        trades: Liste des trades
+        
+    Returns:
+        Ratio de Sharpe
+    """
+    if not trades:
+        return 0.0
+    
+    # Extraire les profits quotidiens
+    daily_profits = {}
+    
+    for trade in trades:
+        closed_date = datetime.fromtimestamp(trade.get("closed_at", 0)).strftime("%Y-%m-%d")
+        profit = trade.get("profit", 0)
+        
+        if closed_date not in daily_profits:
+            daily_profits[closed_date] = 0
+        
+        daily_profits[closed_date] += profit
+    
+    # Calculer les retours quotidiens
+    daily_returns = list(daily_profits.values())
+    
+    if not daily_returns:
+        return 0.0
+    
+    # Calculer la moyenne et l'écart-type
+    avg_return = sum(daily_returns) / len(daily_returns)
+    std_return = (sum((r - avg_return) ** 2 for r in daily_returns) / len(daily_returns)) ** 0.5
+    
+    # Calcul du ratio de Sharpe (annualisé)
+    risk_free_rate = 0.0  # Simplification
+    
+    if std_return > 0:
+        sharpe = (avg_return - risk_free_rate) / std_return * (252 ** 0.5)  # Annualisation
+    else:
+        sharpe = 0.0
+    
+    return sharpe
+
+def _calculate_consecutive_wins(self, trades: List[Dict[str, Any]]) -> int:
+    """
+    Calcule le nombre de victoires consécutives
+    
+    Args:
+        trades: Liste des trades
+        
+    Returns:
+        Nombre maximum de victoires consécutives
+    """
+    if not trades:
+        return 0
+    
+    # Trier les trades par date
+    sorted_trades = sorted(trades, key=lambda x: x.get("closed_at", 0))
+    
+    # Calcul des victoires consécutives
+    current_streak = 0
+    max_streak = 0
+    
+    for trade in sorted_trades:
+        profit = trade.get("profit", 0)
+        
+        if profit > 0:
+            current_streak += 1
+            max_streak = max(max_streak, current_streak)
+        else:
+            current_streak = 0
+    
+    return max_streak
+
+def _calculate_consecutive_losses(self, trades: List[Dict[str, Any]]) -> int:
+    """
+    Calcule le nombre de pertes consécutives
+    
+    Args:
+        trades: Liste des trades
+        
+    Returns:
+        Nombre maximum de pertes consécutives
+    """
+    if not trades:
+        return 0
+    
+    # Trier les trades par date
+    sorted_trades = sorted(trades, key=lambda x: x.get("closed_at", 0))
+    
+    # Calcul des pertes consécutives
+    current_streak = 0
+    max_streak = 0
+    
+    for trade in sorted_trades:
+        profit = trade.get("profit", 0)
+        
+        if profit <= 0:
+            current_streak += 1
+            max_streak = max(max_streak, current_streak)
+        else:
+            current_streak = 0
+    
+    return max_streak
+
+def _handle_opportunity(self, data: Dict[str, Any]):
+    """
+    Gestionnaire pour les opportunités de trading
+    
+    Args:
+        data: Données de l'opportunité
+    """
+    # Vérifier si les données sont valides
+    if "id" not in data or "symbol" not in data:
+        self.logger.warning("Données d'opportunité incomplètes, ignorées")
+        return
+    
+    # Ajouter un horodatage si absent
+    if "timestamp" not in data:
+        data["timestamp"] = time.time()
+    
+    # Ajouter un statut si absent
+    if "status" not in data:
+        data["status"] = "new"
+    
+    # Ajouter une date d'expiration si absente
+    if "expiry_time" not in data:
+        # Par défaut, expiration dans 24 heures
+        data["expiry_time"] = data["timestamp"] + 24 * 3600
+    
+    # Vérifier si cette opportunité existe déjà
+    for opp in self.opportunities:
+        if opp["id"] == data["id"]:
+            # Mettre à jour l'opportunité existante
+            opp.update(data)
+            self.logger.debug(f"Opportunité mise à jour: {data['id']}")
+            return
+    
+    # Nouvelle opportunité
+    self.opportunities.append(data)
+    self.logger.info(f"Nouvelle opportunité reçue: {data['id']} - {data['symbol']}")
+    
+    # Déclencher une évaluation des opportunités
+    self._evaluate_opportunities()
+
+def _handle_market_data(self, data: Dict[str, Any]):
+    """
+    Gestionnaire pour les données de marché
+    
+    Args:
+        data: Données de marché
+    """
+    # Extraire le symbole
+    symbol = data.get("symbol")
+    
+    if not symbol:
+        return
+    
+    # Mettre à jour les conditions de marché
+    if symbol not in self.market_conditions:
+        self.market_conditions[symbol] = {}
+    
+    # Mettre à jour avec les nouvelles données
+    self.market_conditions[symbol].update({
+        "last_price": data.get("price", 0),
+        "last_update": time.time()
+    })
+    
+    # Si des données de tendance sont présentes
+    if "trend" in data:
+        self.market_conditions[symbol]["trend"] = data["trend"]
+    
+    # Si des données de volatilité sont présentes
+    if "volatility" in data:
+        self.market_conditions[symbol]["volatility"] = data["volatility"]
+    
+    # Si des données de volume sont présentes
+    if "volume" in data:
+        self.market_conditions[symbol]["volume"] = data["volume"]
+
+def _handle_trade_result(self, data: Dict[str, Any]):
+    """
+    Gestionnaire pour les résultats de trading
+    
+    Args:
+        data: Résultat du trade
+    """
+    # Extraire les informations pertinentes
+    trade_id = data.get("trade_id")
+    opportunity_id = data.get("opportunity_id")
+    profit = data.get("profit", 0)
+    
+    if not trade_id:
+        return
+    
+    # Enregistrer le résultat dans l'historique
+    if "positions" not in self.portfolio_state:
+        self.portfolio_state["positions"] = []
+    
+    if "historical_positions" not in self.portfolio_state:
+        self.portfolio_state["historical_positions"] = []
+    
+    # Rechercher la position dans les positions actives
+    for i, pos in enumerate(self.portfolio_state["positions"]):
+        if pos.get("id") == trade_id:
+            # Mettre à jour la position
+            pos["closed_at"] = time.time()
+            pos["profit"] = profit
+            
+            # Déplacer vers l'historique
+            self.portfolio_state["historical_positions"].append(pos)
+            self.portfolio_state["positions"].pop(i)
+            
+            # Mettre à jour le capital
+            self.portfolio_state["total_capital"] += profit
+            self.portfolio_state["available_capital"] += pos.get("amount", 0) + profit
+            self.portfolio_state["allocated_capital"] -= pos.get("amount", 0)
+            
+            # Mettre à jour les métriques
+            self._update_performance_metrics()
+            
+            self.logger.info(f"Position fermée: {trade_id}, profit: {profit}")
+            break
+    
+    # Si lié à une opportunité, mettre à jour l'opportunité
+    if opportunity_id:
+        for opp in self.opportunities:
+            if opp.get("id") == opportunity_id:
+                opp["status"] = "closed"
+                opp["result"] = {
+                    "profit": profit,
+                    "closed_at": time.time()
+                }
+                
+                # Ajouter à l'historique
+                self.opportunity_history.append(opp)
+                break
+
+def _handle_portfolio_update(self, data: Dict[str, Any]):
+    """
+    Gestionnaire pour les mises à jour de portefeuille
+    
+    Args:
+        data: Mise à jour du portefeuille
+    """
+    # Mettre à jour l'état du portefeuille
+    if "total_capital" in data:
+        self.portfolio_state["total_capital"] = data["total_capital"]
+    
+    if "available_capital" in data:
+        self.portfolio_state["available_capital"] = data["available_capital"]
+    
+    if "allocated_capital" in data:
+        self.portfolio_state["allocated_capital"] = data["allocated_capital"]
+    
+    if "positions" in data:
+        self.portfolio_state["positions"] = data["positions"]
+    
+    # Mettre à jour le dernier horodatage
+    self.portfolio_state["last_update"] = time.time()
+    
+    # Déclencher une optimisation
+    self._optimize_portfolio()
+
+def _handle_optimization_request(self, data: Dict[str, Any]):
+    """
+    Gestionnaire pour les demandes d'optimisation
+    
+    Args:
+        data: Demande d'optimisation
+    """
+    request_id = data.get("request_id", "unknown")
+    optimization_type = data.get("type", "portfolio")
+    
+    if optimization_type == "portfolio":
+        # Optimisation du portefeuille
+        self._optimize_portfolio()
+        
+        # Répondre à la demande
+        self.event_bus.publish("optimization_response", {
+            "request_id": request_id,
+            "type": optimization_type,
+            "status": "completed",
+            "timestamp": time.time()
+        })
+    elif optimization_type == "execution":
+        # Optimisation de l'exécution
+        self._optimize_execution()
+        
+        # Répondre à la demande
+        self.event_bus.publish("optimization_response", {
+            "request_id": request_id,
+            "type": optimization_type,
+            "status": "completed",
+            "timestamp": time.time()
+        })
+    else:
+        # Type inconnu
+        self.event_bus.publish("optimization_response", {
+            "request_id": request_id,
+            "type": optimization_type,
+            "status": "error",
+            "message": f"Type d'optimisation inconnu: {optimization_type}",
+            "timestamp": time.time()
+        })
+
+if __name__ == "__main__":
+    # Test du maximiseur de gains
+    gain_maximizer = FlowGainMaximizer()
+    gain_maximizer.start()
+    
+    # Attendre un peu pour les initialisations
+    time.sleep(2)
+    
+    # Simuler une opportunité
+    test_opportunity = {
+        "id": "test_opportunity_1",
+        "symbol": "BTC/USDT",
+        "direction": "long",
+        "source": "market_prediction",
+        "entry_price": 50000,
+        "take_profit": 52000,
+        "stop_loss": 49000,
+        "confidence": 0.8,
+        "timestamp": time.time()
+    }
+    
+    gain_maximizer._handle_opportunity(test_opportunity)
+    
+    # Attendre un peu pour le traitement
+    time.sleep(2)
+    
+    # Arrêter le maximiseur
+    gain_maximizer.stop()

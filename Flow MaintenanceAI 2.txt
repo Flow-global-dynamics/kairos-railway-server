@@ -1,0 +1,647 @@
+def _perform_system_diagnostic(self) -> Dict[str, Any]:
+        """
+        Effectue un diagnostic système
+        
+        Returns:
+            Résultat du diagnostic
+        """
+        self.logger.info("Diagnostic système en cours...")
+        
+        # Récupérer l'état du système
+        system_data = self._get_system_status()
+        
+        # Collecter les problèmes actifs
+        active_issues = [issue for issue in self.detected_issues if time.time() - issue["timestamp"] < 3600]
+        
+        # Collecter les actions de maintenance récentes
+        recent_actions = [action for action in self.maintenance_history if time.time() - action["timestamp"] < 3600]
+        
+        # Vérifier les ressources
+        resources = system_data.get("resources", {})
+        resource_status = {
+            "cpu": "healthy" if resources.get("cpu", 0) < self.config["health_check"]["thresholds"]["cpu_usage_percent"] else "warning",
+            "memory": "healthy" if resources.get("memory", 0) < self.config["health_check"]["thresholds"]["memory_usage_percent"] else "warning",
+            "disk": "healthy" if resources.get("disk", 0) < self.config["health_check"]["thresholds"]["disk_usage_percent"] else "warning"
+        }
+        
+        # Vérifier les modules critiques
+        critical_modules = self.config["health_check"]["critical_modules"]
+        modules_status = system_data.get("modules", {}).get("details", {})
+        
+        critical_modules_status = {
+            module: modules_status.get(module, {}).get("status", "unknown")
+            for module in critical_modules
+        }
+        
+        # Déterminer le statut global
+        if "critical" in resource_status.values() or "failed" in critical_modules_status.values():
+            global_health = "critical"
+        elif "warning" in resource_status.values() or "inactive" in critical_modules_status.values():
+            global_health = "degraded"
+        else:
+            global_health = "healthy"
+        
+        # Générer des recommandations
+        recommendations = []
+        
+        for issue in active_issues:
+            if issue["type"] == "resource_usage" and issue["resource"] == "memory":
+                recommendations.append({
+                    "id": "diag_rec_1",
+                    "description": "Effectuer un nettoyage mémoire",
+                    "action": "memory_cleanup",
+                    "priority": issue["severity"]
+                })
+            elif issue["type"] == "module_status":
+                recommendations.append({
+                    "id": "diag_rec_2",
+                    "description": f"Redémarrer le module {issue.get('module')}",
+                    "action": "module_restart",
+                    "module": issue.get("module"),
+                    "priority": issue["severity"]
+                })
+        
+        # Résultat du diagnostic
+        return {
+            "status": global_health,
+            "timestamp": time.time(),
+            "resources": {
+                "values": resources,
+                "status": resource_status
+            },
+            "modules": {
+                "critical": critical_modules_status,
+                "total_active": system_data.get("modules", {}).get("counts", {}).get("running", 0),
+                "total_inactive": system_data.get("modules", {}).get("counts", {}).get("inactive", 0) + 
+                                system_data.get("modules", {}).get("counts", {}).get("failed", 0)
+            },
+            "issues": {
+                "count": len(active_issues),
+                "critical": len([i for i in active_issues if i["severity"] == "critical"]),
+                "details": active_issues[:5]  # Limiter aux 5 plus récents
+            },
+            "maintenance": {
+                "count": len(recent_actions),
+                "details": recent_actions[:5]  # Limiter aux 5 plus récents
+            },
+            "recommendations": recommendations
+        }
+    
+    def _perform_module_diagnostic(self, module_name: str) -> Dict[str, Any]:
+        """
+        Effectue un diagnostic d'un module
+        
+        Args:
+            module_name: Nom du module
+            
+        Returns:
+            Résultat du diagnostic
+        """
+        self.logger.info(f"Diagnostic du module {module_name} en cours...")
+        
+        # Vérifier si le module est connu
+        if module_name not in self.modules_health:
+            return {
+                "status": "unknown",
+                "error": f"Module {module_name} inconnu",
+                "timestamp": time.time()
+            }
+        
+        # Récupérer l'état du module
+        module_health = self.modules_health[module_name]
+        
+        # Collecter les erreurs récentes
+        recent_errors = module_health.get("errors", [])
+        
+        # Collecter les actions de maintenance récentes
+        recent_actions = [action for action in self.maintenance_history 
+                         if action.get("module") == module_name and time.time() - action["timestamp"] < 86400]
+        
+        # Récupérer les métriques de performance
+        performance = module_health.get("performance", {})
+        
+        # Vérifier l'état du module
+        status = module_health.get("status", "unknown")
+        
+        # Générer des recommandations
+        recommendations = []
+        
+        if status == "inactive":
+            recommendations.append({
+                "id": "module_rec_1",
+                "description": f"Redémarrer le module {module_name}",
+                "action": "module_restart",
+                "priority": "high"
+            })
+        elif status == "failed":
+            recommendations.append({
+                "id": "module_rec_2",
+                "description": f"Redémarrer le module {module_name} après vérification des logs",
+                "action": "module_restart",
+                "priority": "critical"
+            })
+        
+        # Si beaucoup d'erreurs récentes
+        if len(recent_errors) > 5:
+            recommendations.append({
+                "id": "module_rec_3",
+                "description": f"Analyser les logs d'erreur de {module_name}",
+                "action": "analyze_logs",
+                "priority": "medium"
+            })
+        
+        # Vérifier les métriques spécifiques
+        if "error_rate" in performance and performance["error_rate"] > 0.05:
+            recommendations.append({
+                "id": "module_rec_4",
+                "description": f"Optimiser la gestion d'erreurs de {module_name}",
+                "action": "optimize_error_handling",
+                "priority": "high"
+            })
+        
+        if "memory_usage" in performance and performance["memory_usage"] > 80:
+            recommendations.append({
+                "id": "module_rec_5",
+                "description": f"Optimiser l'utilisation mémoire de {module_name}",
+                "action": "optimize_memory",
+                "priority": "medium"
+            })
+        
+        # Résultat du diagnostic
+        return {
+            "status": status,
+            "uptime": module_health.get("uptime", 0),
+            "restart_count": module_health.get("restart_count", 0),
+            "performance": performance,
+            "errors": {
+                "count": len(recent_errors),
+                "details": recent_errors[:5]  # Limiter aux 5 plus récents
+            },
+            "maintenance": {
+                "count": len(recent_actions),
+                "details": recent_actions[:5]  # Limiter aux 5 plus récents
+            },
+            "recommendations": recommendations,
+            "timestamp": time.time()
+        }
+    
+    def _handle_maintenance_request(self, data: Dict[str, Any]):
+        """
+        Gestionnaire pour les demandes de maintenance
+        
+        Args:
+            data: Demande de maintenance
+        """
+        # Extraire les informations
+        request_id = data.get("request_id", f"maint_{int(time.time())}")
+        action = data.get("action", "unknown")
+        target = data.get("target", "system")
+        
+        self.logger.info(f"Demande de maintenance: {action} sur {target} (ID: {request_id})")
+        
+        # Effectuer l'action de maintenance
+        result = self._perform_maintenance_action(action, target, data)
+        
+        # Répondre à la demande
+        self.event_bus.publish("maintenance_response", {
+            "request_id": request_id,
+            "action": action,
+            "target": target,
+            "result": result,
+            "timestamp": time.time()
+        })
+    
+    def _perform_maintenance_action(self, action: str, target: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Effectue une action de maintenance
+        
+        Args:
+            action: Action à effectuer
+            target: Cible de l'action
+            data: Données supplémentaires
+            
+        Returns:
+            Résultat de l'action
+        """
+        if action == "restart":
+            # Redémarrer un module
+            if target != "system":
+                return self._restart_module(target)
+            else:
+                return {"success": False, "error": "Redémarrage système non implémenté"}
+        
+        elif action == "cleanup":
+            # Nettoyage de ressources
+            if target == "memory":
+                return self._cleanup_memory(data.get("level", "normal"))
+            elif target == "disk":
+                return self._cleanup_disk(data.get("targets", ["temp"]))
+            elif target == "database":
+                return self._optimize_database_action()
+            elif target == "logs":
+                return self._cleanup_logs(data.get("retention_days"))
+            else:
+                return {"success": False, "error": f"Cible de nettoyage inconnue: {target}"}
+        
+        elif action == "optimize":
+            # Optimisation
+            if target == "performance":
+                return self._optimize_performance(data.get("module"))
+            elif target == "resources":
+                return self._optimize_resources()
+            else:
+                return {"success": False, "error": f"Cible d'optimisation inconnue: {target}"}
+        
+        elif action == "analyze":
+            # Analyse
+            if target == "logs":
+                return self._analyze_logs(data.get("module"), data.get("hours", 24))
+            elif target == "performance":
+                return self._analyze_performance(data.get("module"))
+            else:
+                return {"success": False, "error": f"Cible d'analyse inconnue: {target}"}
+        
+        else:
+            return {"success": False, "error": f"Action de maintenance inconnue: {action}"}
+    
+    def _restart_module(self, module_name: str) -> Dict[str, Any]:
+        """
+        Redémarre un module
+        
+        Args:
+            module_name: Nom du module
+            
+        Returns:
+            Résultat du redémarrage
+        """
+        self.logger.info(f"Redémarrage du module {module_name}...")
+        
+        # Publier une demande de redémarrage
+        self.event_bus.publish("module_restart", {
+            "module": module_name,
+            "reason": "maintenance_request",
+            "timestamp": time.time()
+        })
+        
+        # Enregistrer l'action de maintenance
+        self._record_maintenance_action({
+            "type": "module_restart",
+            "module": module_name,
+            "timestamp": time.time()
+        })
+        
+        # Mettre à jour l'état du module
+        if module_name in self.modules_health:
+            self.modules_health[module_name]["status"] = "restarting"
+            self.modules_health[module_name]["restart_count"] += 1
+            self.modules_health[module_name]["last_restart"] = time.time()
+        
+        return {
+            "success": True,
+            "module": module_name,
+            "timestamp": time.time()
+        }
+    
+    def _cleanup_memory(self, level: str = "normal") -> Dict[str, Any]:
+        """
+        Nettoie la mémoire
+        
+        Args:
+            level: Niveau de nettoyage
+            
+        Returns:
+            Résultat du nettoyage
+        """
+        self.logger.info(f"Nettoyage mémoire (niveau: {level})...")
+        
+        # Publier une demande de nettoyage
+        self.event_bus.publish("memory_cleanup", {
+            "source": "flow_maintenance_ai",
+            "level": level,
+            "timestamp": time.time()
+        })
+        
+        # Enregistrer l'action de maintenance
+        self._record_maintenance_action({
+            "type": "memory_cleanup",
+            "level": level,
+            "timestamp": time.time()
+        })
+        
+        return {
+            "success": True,
+            "level": level,
+            "timestamp": time.time()
+        }
+    
+    def _cleanup_disk(self, targets: List[str]) -> Dict[str, Any]:
+        """
+        Nettoie le disque
+        
+        Args:
+            targets: Cibles du nettoyage
+            
+        Returns:
+            Résultat du nettoyage
+        """
+        self.logger.info(f"Nettoyage disque (cibles: {targets})...")
+        
+        # Publier une demande de nettoyage
+        self.event_bus.publish("disk_cleanup", {
+            "source": "flow_maintenance_ai",
+            "targets": targets,
+            "timestamp": time.time()
+        })
+        
+        # Enregistrer l'action de maintenance
+        self._record_maintenance_action({
+            "type": "disk_cleanup",
+            "targets": targets,
+            "timestamp": time.time()
+        })
+        
+        return {
+            "success": True,
+            "targets": targets,
+            "timestamp": time.time()
+        }
+    
+    def _optimize_database_action(self) -> Dict[str, Any]:
+        """
+        Optimise la base de données
+        
+        Returns:
+            Résultat de l'optimisation
+        """
+        self.logger.info("Optimisation de la base de données...")
+        
+        # Publier une demande d'optimisation
+        self.event_bus.publish("database_optimization", {
+            "source": "flow_maintenance_ai",
+            "operations": ["vacuum", "reindex", "analyze"],
+            "timestamp": time.time()
+        })
+        
+        # Enregistrer l'action de maintenance
+        self._record_maintenance_action({
+            "type": "database_optimization",
+            "timestamp": time.time()
+        })
+        
+        return {
+            "success": True,
+            "operations": ["vacuum", "reindex", "analyze"],
+            "timestamp": time.time()
+        }
+    
+    def _cleanup_logs(self, retention_days: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Nettoie les logs
+        
+        Args:
+            retention_days: Jours de rétention
+            
+        Returns:
+            Résultat du nettoyage
+        """
+        # Utiliser la configuration par défaut si non spécifié
+        if retention_days is None:
+            retention_days = self.config["optimization"]["thresholds"]["log_retention_days"]
+        
+        self.logger.info(f"Nettoyage des logs (rétention: {retention_days} jours)...")
+        
+        # Publier une demande de nettoyage
+        self.event_bus.publish("log_maintenance", {
+            "source": "flow_maintenance_ai",
+            "operations": ["rotate", "compress", "cleanup"],
+            "retention_days": retention_days,
+            "timestamp": time.time()
+        })
+        
+        # Enregistrer l'action de maintenance
+        self._record_maintenance_action({
+            "type": "log_maintenance",
+            "retention_days": retention_days,
+            "timestamp": time.time()
+        })
+        
+        return {
+            "success": True,
+            "retention_days": retention_days,
+            "timestamp": time.time()
+        }
+    
+    def _optimize_performance(self, module: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Optimise les performances
+        
+        Args:
+            module: Module à optimiser (optionnel)
+            
+        Returns:
+            Résultat de l'optimisation
+        """
+        if module:
+            self.logger.info(f"Optimisation des performances du module {module}...")
+            
+            # Publier une demande d'optimisation
+            self.event_bus.publish("performance_optimization", {
+                "source": "flow_maintenance_ai",
+                "module": module,
+                "timestamp": time.time()
+            })
+            
+            # Enregistrer l'action de maintenance
+            self._record_maintenance_action({
+                "type": "performance_optimization",
+                "module": module,
+                "timestamp": time.time()
+            })
+            
+            return {
+                "success": True,
+                "module": module,
+                "timestamp": time.time()
+            }
+        else:
+            self.logger.info("Optimisation des performances du système...")
+            
+            # Publier une demande d'optimisation
+            self.event_bus.publish("performance_optimization", {
+                "source": "flow_maintenance_ai",
+                "system_wide": True,
+                "timestamp": time.time()
+            })
+            
+            # Enregistrer l'action de maintenance
+            self._record_maintenance_action({
+                "type": "performance_optimization",
+                "system_wide": True,
+                "timestamp": time.time()
+            })
+            
+            return {
+                "success": True,
+                "system_wide": True,
+                "timestamp": time.time()
+            }
+    
+    def _optimize_resources(self) -> Dict[str, Any]:
+        """
+        Optimise les ressources
+        
+        Returns:
+            Résultat de l'optimisation
+        """
+        self.logger.info("Optimisation des ressources...")
+        
+        # Nettoyer la mémoire
+        self._cleanup_memory("light")
+        
+        # Nettoyer le disque
+        self._cleanup_disk(["temp", "cache"])
+        
+        # Optimiser les caches
+        self.event_bus.publish("cache_maintenance", {
+            "source": "flow_maintenance_ai",
+            "operations": ["clean_expired"],
+            "timestamp": time.time()
+        })
+        
+        # Enregistrer l'action de maintenance
+        self._record_maintenance_action({
+            "type": "resource_optimization",
+            "timestamp": time.time()
+        })
+        
+        return {
+            "success": True,
+            "optimized_resources": ["memory", "disk", "cache"],
+            "timestamp": time.time()
+        }
+    
+    def _analyze_logs(self, module: Optional[str] = None, hours: int = 24) -> Dict[str, Any]:
+        """
+        Analyse les logs
+        
+        Args:
+            module: Module à analyser (optionnel)
+            hours: Nombre d'heures à analyser
+            
+        Returns:
+            Résultat de l'analyse
+        """
+        if module:
+            self.logger.info(f"Analyse des logs du module {module} (dernières {hours}h)...")
+            
+            # Publier une demande d'analyse
+            self.event_bus.publish("log_analysis", {
+                "source": "flow_maintenance_ai",
+                "module": module,
+                "hours": hours,
+                "timestamp": time.time()
+            })
+            
+            # Enregistrer l'action de maintenance
+            self._record_maintenance_action({
+                "type": "log_analysis",
+                "module": module,
+                "hours": hours,
+                "timestamp": time.time()
+            })
+            
+            return {
+                "success": True,
+                "module": module,
+                "hours": hours,
+                "timestamp": time.time()
+            }
+        else:
+            self.logger.info(f"Analyse des logs système (dernières {hours}h)...")
+            
+            # Publier une demande d'analyse
+            self.event_bus.publish("log_analysis", {
+                "source": "flow_maintenance_ai",
+                "system_wide": True,
+                "hours": hours,
+                "timestamp": time.time()
+            })
+            
+            # Enregistrer l'action de maintenance
+            self._record_maintenance_action({
+                "type": "log_analysis",
+                "system_wide": True,
+                "hours": hours,
+                "timestamp": time.time()
+            })
+            
+            return {
+                "success": True,
+                "system_wide": True,
+                "hours": hours,
+                "timestamp": time.time()
+            }
+    
+    def _analyze_performance(self, module: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Analyse les performances
+        
+        Args:
+            module: Module à analyser (optionnel)
+            
+        Returns:
+            Résultat de l'analyse
+        """
+        if module:
+            self.logger.info(f"Analyse des performances du module {module}...")
+            
+            # Publier une demande d'analyse
+            self.event_bus.publish("performance_analysis", {
+                "source": "flow_maintenance_ai",
+                "module": module,
+                "timestamp": time.time()
+            })
+            
+            # Enregistrer l'action de maintenance
+            self._record_maintenance_action({
+                "type": "performance_analysis",
+                "module": module,
+                "timestamp": time.time()
+            })
+            
+            return {
+                "success": True,
+                "module": module,
+                "timestamp": time.time()
+            }
+        else:
+            self.logger.info("Analyse des performances du système...")
+            
+            # Publier une demande d'analyse
+            self.event_bus.publish("performance_analysis", {
+                "source": "flow_maintenance_ai",
+                "system_wide": True,
+                "timestamp": time.time()
+            })
+            
+            # Enregistrer l'action de maintenance
+            self._record_maintenance_action({
+                "type": "performance_analysis",
+                "system_wide": True,
+                "timestamp": time.time()
+            })
+            
+            return {
+                "success": True,
+                "system_wide": True,
+                "timestamp": time.time()
+            }
+
+if __name__ == "__main__":
+    # Test du module de maintenance
+    maintenance_ai = FlowMaintenanceAI()
+    maintenance_ai.start()
+    
+    time.sleep(10)  # Laisser le module fonctionner un moment
+    
+    maintenance_ai.stop()

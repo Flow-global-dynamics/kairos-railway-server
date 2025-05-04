@@ -1,0 +1,1570 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+FlowMaintenanceAI.py - Module de maintenance autonome pour FlowGlobalDynamics™
+"""
+
+import logging
+import time
+import threading
+import json
+import os
+import numpy as np
+from datetime import datetime, timedelta
+from typing import Dict, Any, List, Optional, Union, Tuple, Set
+
+# Import local
+try:
+    from flow_eventbus import get_event_bus
+except ImportError:
+    # Support mode hors ligne
+    class DummyEventBus:
+        def publish(self, *args, **kwargs): pass
+        def subscribe(self, *args, **kwargs): pass
+        def unsubscribe(self, *args, **kwargs): pass
+    
+    def get_event_bus():
+        return DummyEventBus()
+
+class FlowMaintenanceAI:
+    """
+    Module de maintenance autonome pour FlowGlobalDynamics™
+    Capable d'auto-diagnostiquer et réparer le système
+    """
+    
+    def __init__(self):
+        """Initialisation du FlowMaintenanceAI"""
+        self.running = False
+        self.threads = {}
+        self.logger = self._setup_logger()
+        self.event_bus = get_event_bus()
+        self.config = self._load_configuration()
+        
+        # État du système
+        self.system_health = {}          # État de santé du système
+        self.modules_health = {}         # État de santé des modules
+        self.detected_issues = []        # Problèmes détectés
+        self.maintenance_history = []    # Historique des maintenances
+        self.diagnostic_results = {}     # Résultats des diagnostics
+        
+        # Variables de suivi
+        self.last_health_check = 0
+        self.last_optimization = 0
+        self.last_deep_analysis = 0
+        self.last_cleanup = 0
+        
+    def _setup_logger(self):
+        """Configuration du logger"""
+        logger = logging.getLogger("FlowMaintenanceAI")
+        logger.setLevel(logging.INFO)
+        if not logger.handlers:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            handler.setFormatter(formatter)
+            logger.addHandler(handler)
+        return logger
+    
+    def _load_configuration(self) -> Dict[str, Any]:
+        """
+        Charge la configuration du module de maintenance
+        
+        Returns:
+            Configuration de maintenance
+        """
+        # Configuration par défaut
+        default_config = {
+            "health_check": {
+                "interval_seconds": 60,        # Intervalle de vérification de santé
+                "critical_modules": [          # Modules critiques
+                    "flow_event_bus",
+                    "flow_risk_shield",
+                    "flow_bytebeat"
+                ],
+                "thresholds": {
+                    "memory_usage_percent": 85,    # Seuil d'utilisation mémoire
+                    "cpu_usage_percent": 90,       # Seuil d'utilisation CPU
+                    "disk_usage_percent": 80,      # Seuil d'utilisation disque
+                    "error_rate_percent": 5,       # Taux d'erreur acceptable
+                    "response_time_ms": 500        # Temps de réponse maximum
+                }
+            },
+            "optimization": {
+                "interval_minutes": 30,            # Intervalle d'optimisation
+                "targets": {
+                    "database": True,              # Optimiser la base de données
+                    "memory": True,                # Optimiser l'utilisation mémoire
+                    "log_files": True,             # Optimiser les fichiers logs
+                    "cache": True                  # Optimiser les caches
+                },
+                "thresholds": {
+                    "inactive_data_days": 7,       # Données inactives depuis X jours
+                    "log_retention_days": 30,      # Rétention des logs
+                    "cache_expiry_hours": 24       # Expiration du cache
+                }
+            },
+            "deep_analysis": {
+                "interval_hours": 6,               # Intervalle d'analyse profonde
+                "analysis_types": [
+                    "performance_patterns",        # Patterns de performance
+                    "error_clusters",              # Clusters d'erreurs
+                    "resource_usage",              # Utilisation des ressources
+                    "code_health"                  # Santé du code
+                ],
+                "max_analysis_time_seconds": 300   # Temps maximum d'analyse
+            },
+            "self_healing": {
+                "enabled": True,                   # Auto-réparation activée
+                "max_restart_attempts": 3,         # Tentatives max de redémarrage
+                "cool_down_minutes": 30,           # Période de refroidissement
+                "critical_issues_only": False,     # Seulement les problèmes critiques
+                "heal_strategies": [
+                    "restart_module",              # Redémarrer le module
+                    "clean_resources",             # Nettoyer les ressources
+                    "reset_connections",           # Réinitialiser les connexions
+                    "revert_configuration",        # Revenir à la config précédente
+                    "clear_cache"                  # Vider le cache
+                ]
+            },
+            "resource_management": {
+                "memory_cleanup_threshold": 80,    # Seuil pour nettoyage mémoire
+                "disk_cleanup_threshold": 85,      # Seuil pour nettoyage disque
+                "cpu_throttling_threshold": 90,    # Seuil pour limitation CPU
+                "database_optimization_days": 7    # Jours entre optimisations DB
+            },
+            "notification": {
+                "levels": {
+                    "critical": True,              # Notifications critiques
+                    "warning": True,               # Avertissements
+                    "info": False                  # Informations
+                },
+                "channels": {
+                    "event_bus": True,             # Événements sur le bus
+                    "log": True,                   # Journalisation
+                    "system_status": True          # État système
+                },
+                "alert_cooldown_minutes": 30       # Période entre alertes
+            }
+        }
+        
+        try:
+            # Tenter de charger depuis un fichier (désactivé pour l'exemple)
+            # with open("maintenance_config.json", "r") as f:
+            #     return json.load(f)
+            return default_config
+        except Exception as e:
+            self.logger.warning(f"Impossible de charger la configuration: {str(e)}. Utilisation des valeurs par défaut.")
+            return default_config
+    
+    def start(self):
+        """Démarrage du module de maintenance"""
+        if self.running:
+            self.logger.warning("FlowMaintenanceAI est déjà en cours d'exécution")
+            return
+            
+        self.running = True
+        self.logger.info("Démarrage du FlowMaintenanceAI...")
+        
+        # Démarrage des threads
+        self._start_maintenance_threads()
+        
+        # Enregistrer les gestionnaires d'événements
+        self._register_events()
+        
+        self.logger.info("FlowMaintenanceAI démarré avec succès")
+        
+    def stop(self):
+        """Arrêt du module de maintenance"""
+        if not self.running:
+            self.logger.warning("FlowMaintenanceAI n'est pas en cours d'exécution")
+            return
+            
+        self.running = False
+        self.logger.info("Arrêt du FlowMaintenanceAI...")
+        
+        # Arrêter les threads
+        for thread_name, thread in self.threads.items():
+            if thread and thread.is_alive():
+                thread.join(timeout=2.0)
+                self.logger.debug(f"Thread {thread_name} arrêté")
+        
+        # Désenregistrer les gestionnaires d'événements
+        self._unregister_events()
+        
+        self.logger.info("FlowMaintenanceAI arrêté avec succès")
+    
+    def _start_maintenance_threads(self):
+        """Démarre les threads de maintenance"""
+        # Thread de vérification de santé
+        self.threads["health_check"] = threading.Thread(
+            target=self._health_check_loop, 
+            daemon=True
+        )
+        self.threads["health_check"].start()
+        
+        # Thread d'optimisation
+        self.threads["optimization"] = threading.Thread(
+            target=self._optimization_loop, 
+            daemon=True
+        )
+        self.threads["optimization"].start()
+        
+        # Thread d'analyse profonde
+        self.threads["deep_analysis"] = threading.Thread(
+            target=self._deep_analysis_loop, 
+            daemon=True
+        )
+        self.threads["deep_analysis"].start()
+        
+        # Thread de nettoyage des ressources
+        self.threads["resource_cleanup"] = threading.Thread(
+            target=self._resource_cleanup_loop, 
+            daemon=True
+        )
+        self.threads["resource_cleanup"].start()
+    
+    def _register_events(self):
+        """Enregistrement des abonnements aux événements"""
+        # S'abonner aux rapports d'état système
+        self.event_bus.subscribe("system_status_report", self._handle_system_status)
+        
+        # S'abonner aux alertes système
+        self.event_bus.subscribe("system_alert", self._handle_system_alert)
+        
+        # S'abonner aux changements d'état des modules
+        self.event_bus.subscribe("module_status_change", self._handle_module_status_change)
+        
+        # S'abonner aux métriques de performance
+        self.event_bus.subscribe("performance_metrics", self._handle_performance_metrics)
+        
+        # S'abonner aux rapports d'erreurs
+        self.event_bus.subscribe("error_report", self._handle_error_report)
+        
+        # S'abonner aux demandes de diagnostic
+        self.event_bus.subscribe("diagnostic_request", self._handle_diagnostic_request)
+        
+        # S'abonner aux demandes de maintenance
+        self.event_bus.subscribe("maintenance_request", self._handle_maintenance_request)
+    
+    def _unregister_events(self):
+        """Désenregistrement des abonnements aux événements"""
+        # Se désabonner des rapports d'état système
+        self.event_bus.unsubscribe("system_status_report", self._handle_system_status)
+        
+        # Se désabonner des alertes système
+        self.event_bus.unsubscribe("system_alert", self._handle_system_alert)
+        
+        # Se désabonner des changements d'état des modules
+        self.event_bus.unsubscribe("module_status_change", self._handle_module_status_change)
+        
+        # Se désabonner des métriques de performance
+        self.event_bus.unsubscribe("performance_metrics", self._handle_performance_metrics)
+        
+        # Se désabonner des rapports d'erreurs
+        self.event_bus.unsubscribe("error_report", self._handle_error_report)
+        
+        # Se désabonner des demandes de diagnostic
+        self.event_bus.unsubscribe("diagnostic_request", self._handle_diagnostic_request)
+        
+        # Se désabonner des demandes de maintenance
+        self.event_bus.unsubscribe("maintenance_request", self._handle_maintenance_request)
+    
+    def _health_check_loop(self):
+        """Boucle de vérification de santé du système"""
+        self.logger.info("Démarrage de la boucle de vérification de santé...")
+        
+        while self.running:
+            try:
+                current_time = time.time()
+                interval = self.config["health_check"]["interval_seconds"]
+                
+                # Vérifier s'il est temps de faire une vérification
+                if current_time - self.last_health_check > interval:
+                    self._perform_health_check()
+                    self.last_health_check = current_time
+                
+                time.sleep(1)
+            except Exception as e:
+                self.logger.error(f"Erreur dans la boucle de vérification de santé: {str(e)}")
+                time.sleep(10)  # Attendre en cas d'erreur
+    
+    def _optimization_loop(self):
+        """Boucle d'optimisation du système"""
+        self.logger.info("Démarrage de la boucle d'optimisation...")
+        
+        # Démarrer avec un délai pour éviter de surcharger le système
+        time.sleep(10)
+        
+        while self.running:
+            try:
+                current_time = time.time()
+                interval = self.config["optimization"]["interval_minutes"] * 60
+                
+                # Vérifier s'il est temps de faire une optimisation
+                if current_time - self.last_optimization > interval:
+                    self._perform_system_optimization()
+                    self.last_optimization = current_time
+                
+                time.sleep(60)  # Vérifier toutes les minutes
+            except Exception as e:
+                self.logger.error(f"Erreur dans la boucle d'optimisation: {str(e)}")
+                time.sleep(300)  # Attendre en cas d'erreur
+    
+    def _deep_analysis_loop(self):
+        """Boucle d'analyse profonde du système"""
+        self.logger.info("Démarrage de la boucle d'analyse profonde...")
+        
+        # Démarrer avec un délai plus important
+        time.sleep(30)
+        
+        while self.running:
+            try:
+                current_time = time.time()
+                interval = self.config["deep_analysis"]["interval_hours"] * 3600
+                
+                # Vérifier s'il est temps de faire une analyse profonde
+                if current_time - self.last_deep_analysis > interval:
+                    self._perform_deep_analysis()
+                    self.last_deep_analysis = current_time
+                
+                time.sleep(300)  # Vérifier toutes les 5 minutes
+            except Exception as e:
+                self.logger.error(f"Erreur dans la boucle d'analyse profonde: {str(e)}")
+                time.sleep(600)  # Attendre en cas d'erreur
+    
+    def _resource_cleanup_loop(self):
+        """Boucle de nettoyage des ressources"""
+        self.logger.info("Démarrage de la boucle de nettoyage des ressources...")
+        
+        # Démarrer avec un délai
+        time.sleep(20)
+        
+        while self.running:
+            try:
+                current_time = time.time()
+                
+                # Vérifier les seuils de ressources
+                self._check_resource_thresholds()
+                
+                # Nettoyage périodique
+                if current_time - self.last_cleanup > 3600:  # Toutes les heures
+                    self._perform_resource_cleanup()
+                    self.last_cleanup = current_time
+                
+                time.sleep(120)  # Vérifier toutes les 2 minutes
+            except Exception as e:
+                self.logger.error(f"Erreur dans la boucle de nettoyage des ressources: {str(e)}")
+                time.sleep(300)  # Attendre en cas d'erreur
+    
+    def _perform_health_check(self):
+        """Effectue une vérification de santé du système"""
+        self.logger.debug("Vérification de santé du système...")
+        
+        # Récupérer l'état du système
+        system_data = self._get_system_status()
+        if not system_data:
+            return
+        
+        # Mettre à jour l'état de santé
+        self.system_health = {
+            "global_status": system_data.get("global_status", "unknown"),
+            "modules_status": {
+                "active_count": system_data.get("modules", {}).get("counts", {}).get("running", 0),
+                "inactive_count": sum([
+                    system_data.get("modules", {}).get("counts", {}).get("inactive", 0),
+                    system_data.get("modules", {}).get("counts", {}).get("failed", 0),
+                    system_data.get("modules", {}).get("counts", {}).get("restarting", 0)
+                ]),
+                "details": system_data.get("modules", {}).get("details", {})
+            },
+            "resources": system_data.get("resources", {}),
+            "last_check": time.time()
+        }
+        
+        # Vérifier les problèmes potentiels
+        self._detect_health_issues()
+        
+        # Mettre à jour l'état de santé des modules
+        self._update_modules_health(system_data)
+        
+        # Publier un rapport de santé
+        if self.config["notification"]["channels"]["event_bus"]:
+            self.event_bus.publish("maintenance_health_report", {
+                "health_status": self.system_health["global_status"],
+                "detected_issues": len(self.detected_issues),
+                "critical_issues": len([i for i in self.detected_issues if i["severity"] == "critical"]),
+                "modules_health": {k: v["status"] for k, v in self.modules_health.items()},
+                "timestamp": time.time()
+            })
+    
+    def _get_system_status(self) -> Dict[str, Any]:
+        """
+        Récupère l'état du système
+        
+        Returns:
+            État du système
+        """
+        # Dans un système réel, on pourrait faire une requête directe
+        # Simulation pour l'exemple
+        
+        # Créer une demande de statut
+        request_id = f"health_check_{int(time.time())}"
+        
+        # Publier la demande
+        self.event_bus.publish("system_status_request", {
+            "request_id": request_id,
+            "source": "flow_maintenance_ai",
+            "timestamp": time.time()
+        })
+        
+        # Dans un système réel, on attendrait la réponse
+        # Simulation pour l'exemple
+        
+        # Données simulées
+        return {
+            "global_status": "healthy",
+            "modules": {
+                "counts": {
+                    "running": 8,
+                    "inactive": 1,
+                    "failed": 0,
+                    "restarting": 0
+                },
+                "details": {
+                    "flow_event_bus": {"status": "running"},
+                    "flow_bytebeat": {"status": "running"},
+                    "flow_sniper": {"status": "running"},
+                    "flow_horizon_scanner": {"status": "running"},
+                    "flow_risk_shield": {"status": "running"},
+                    "flow_vision_market": {"status": "running"},
+                    "flow_market_predictor": {"status": "inactive"},
+                    "flow_gain_maximizer": {"status": "running"},
+                    "flow_orchestrator": {"status": "running"}
+                }
+            },
+            "resources": {
+                "cpu": 45.2,
+                "memory": 62.8,
+                "disk": 58.3
+            },
+            "timestamp": time.time()
+        }
+    
+    def _detect_health_issues(self):
+        """Détecte les problèmes de santé du système"""
+        # Réinitialiser la liste des problèmes
+        self.detected_issues = []
+        
+        # Vérifier les modules critiques
+        for module_name in self.config["health_check"]["critical_modules"]:
+            module_status = self.system_health.get("modules_status", {}).get("details", {}).get(module_name, {}).get("status", "unknown")
+            
+            if module_status != "running":
+                self.detected_issues.append({
+                    "id": f"critical_module_{module_name}",
+                    "type": "module_status",
+                    "module": module_name,
+                    "description": f"Module critique {module_name} non fonctionnel (statut: {module_status})",
+                    "severity": "critical",
+                    "timestamp": time.time()
+                })
+        
+        # Vérifier les seuils de ressources
+        resources = self.system_health.get("resources", {})
+        
+        # CPU
+        cpu_threshold = self.config["health_check"]["thresholds"]["cpu_usage_percent"]
+        cpu_usage = resources.get("cpu", 0)
+        
+        if cpu_usage > cpu_threshold:
+            self.detected_issues.append({
+                "id": "high_cpu_usage",
+                "type": "resource_usage",
+                "resource": "cpu",
+                "value": cpu_usage,
+                "threshold": cpu_threshold,
+                "description": f"Utilisation CPU élevée: {cpu_usage:.1f}% > {cpu_threshold}%",
+                "severity": "warning" if cpu_usage < cpu_threshold + 10 else "critical",
+                "timestamp": time.time()
+            })
+        
+        # Mémoire
+        memory_threshold = self.config["health_check"]["thresholds"]["memory_usage_percent"]
+        memory_usage = resources.get("memory", 0)
+        
+        if memory_usage > memory_threshold:
+            self.detected_issues.append({
+                "id": "high_memory_usage",
+                "type": "resource_usage",
+                "resource": "memory",
+                "value": memory_usage,
+                "threshold": memory_threshold,
+                "description": f"Utilisation mémoire élevée: {memory_usage:.1f}% > {memory_threshold}%",
+                "severity": "warning" if memory_usage < memory_threshold + 10 else "critical",
+                "timestamp": time.time()
+            })
+        
+        # Disque
+        disk_threshold = self.config["health_check"]["thresholds"]["disk_usage_percent"]
+        disk_usage = resources.get("disk", 0)
+        
+        if disk_usage > disk_threshold:
+            self.detected_issues.append({
+                "id": "high_disk_usage",
+                "type": "resource_usage",
+                "resource": "disk",
+                "value": disk_usage,
+                "threshold": disk_threshold,
+                "description": f"Utilisation disque élevée: {disk_usage:.1f}% > {disk_threshold}%",
+                "severity": "warning" if disk_usage < disk_threshold + 10 else "critical",
+                "timestamp": time.time()
+            })
+        
+        # Traiter les problèmes critiques
+        self._handle_critical_issues()
+    
+    def _update_modules_health(self, system_data: Dict[str, Any]):
+        """
+        Met à jour l'état de santé des modules
+        
+        Args:
+            system_data: Données du système
+        """
+        modules_details = system_data.get("modules", {}).get("details", {})
+        
+        for module_name, module_data in modules_details.items():
+            module_status = module_data.get("status", "unknown")
+            
+            if module_name not in self.modules_health:
+                self.modules_health[module_name] = {
+                    "status": module_status,
+                    "last_change": time.time(),
+                    "uptime": 0,
+                    "restart_count": 0,
+                    "issues": []
+                }
+            else:
+                # Mettre à jour le statut
+                if self.modules_health[module_name]["status"] != module_status:
+                    self.modules_health[module_name]["status"] = module_status
+                    self.modules_health[module_name]["last_change"] = time.time()
+                
+                # Mettre à jour le temps de fonctionnement
+                if module_status == "running":
+                    uptime = time.time() - self.modules_health[module_name]["last_change"]
+                    self.modules_health[module_name]["uptime"] = uptime
+    
+    def _handle_critical_issues(self):
+        """Traite les problèmes critiques"""
+        # Vérifier s'il y a des problèmes critiques
+        critical_issues = [issue for issue in self.detected_issues if issue["severity"] == "critical"]
+        
+        if not critical_issues:
+            return
+        
+        # Vérifier si l'auto-réparation est activée
+        if not self.config["self_healing"]["enabled"]:
+            self.logger.warning(f"Problèmes critiques détectés mais l'auto-réparation est désactivée")
+            return
+        
+        # Traiter chaque problème critique
+        for issue in critical_issues:
+            self.logger.warning(f"Traitement du problème critique: {issue['description']}")
+            
+            # Appliquer la stratégie de réparation appropriée
+            if issue["type"] == "module_status":
+                self._heal_module_issue(issue)
+            elif issue["type"] == "resource_usage":
+                self._heal_resource_issue(issue)
+            else:
+                self.logger.warning(f"Type de problème inconnu: {issue['type']}")
+    
+    def _heal_module_issue(self, issue: Dict[str, Any]):
+        """
+        Répare un problème de module
+        
+        Args:
+            issue: Problème à réparer
+        """
+        module_name = issue.get("module")
+        
+        if not module_name:
+            return
+        
+        # Vérifier si le module est en cours de redémarrage
+        module_status = self.modules_health.get(module_name, {}).get("status")
+        
+        if module_status == "restarting":
+            self.logger.info(f"Module {module_name} déjà en cours de redémarrage")
+            return
+        
+        # Vérifier le nombre de redémarrages
+        restart_count = self.modules_health.get(module_name, {}).get("restart_count", 0)
+        max_restarts = self.config["self_healing"]["max_restart_attempts"]
+        
+        if restart_count >= max_restarts:
+            self.logger.warning(f"Module {module_name} a atteint le nombre maximum de redémarrages ({restart_count})")
+            
+            # Créer une alerte critique
+            self._create_system_alert({
+                "type": "module_restart_limit",
+                "module": module_name,
+                "restart_count": restart_count,
+                "max_restarts": max_restarts,
+                "severity": "critical",
+                "description": f"Module {module_name} a atteint le nombre maximum de redémarrages ({restart_count})",
+                "timestamp": time.time()
+            })
+            
+            return
+        
+        # Incrémenter le compteur de redémarrages
+        if module_name in self.modules_health:
+            self.modules_health[module_name]["restart_count"] = restart_count + 1
+        
+        # Publier une demande de redémarrage
+        self.logger.info(f"Demande de redémarrage du module {module_name}")
+        
+        self.event_bus.publish("module_restart", {
+            "module": module_name,
+            "reason": "maintenance_ai",
+            "issue_id": issue.get("id"),
+            "timestamp": time.time()
+        })
+        
+        # Enregistrer l'action de maintenance
+        self._record_maintenance_action({
+            "type": "module_restart",
+            "module": module_name,
+            "issue": issue.get("id"),
+            "timestamp": time.time()
+        })
+    
+    def _heal_resource_issue(self, issue: Dict[str, Any]):
+        """
+        Répare un problème de ressources
+        
+        Args:
+            issue: Problème à réparer
+        """
+        resource_type = issue.get("resource")
+        
+        if not resource_type:
+            return
+        
+        if resource_type == "memory":
+            # Nettoyage mémoire
+            self._perform_memory_cleanup()
+        elif resource_type == "disk":
+            # Nettoyage disque
+            self._perform_disk_cleanup()
+        elif resource_type == "cpu":
+            # Réduction CPU
+            self._reduce_cpu_usage()
+        
+        # Enregistrer l'action de maintenance
+        self._record_maintenance_action({
+            "type": f"{resource_type}_cleanup",
+            "issue": issue.get("id"),
+            "timestamp": time.time()
+        })
+    
+    def _perform_system_optimization(self):
+        """Effectue des optimisations système"""
+        self.logger.info("Optimisation du système...")
+        
+        optimization_targets = self.config["optimization"]["targets"]
+        
+        # Optimiser la base de données
+        if optimization_targets["database"]:
+            self._optimize_database()
+        
+        # Optimiser l'utilisation mémoire
+        if optimization_targets["memory"]:
+            self._optimize_memory_usage()
+        
+        # Optimiser les fichiers logs
+        if optimization_targets["log_files"]:
+            self._optimize_log_files()
+        
+        # Optimiser les caches
+        if optimization_targets["cache"]:
+            self._optimize_cache()
+        
+        # Publier un rapport d'optimisation
+        self.event_bus.publish("maintenance_optimization_report", {
+            "optimization_types": [k for k, v in optimization_targets.items() if v],
+            "timestamp": time.time()
+        })
+    
+    def _optimize_database(self):
+        """Optimise la base de données"""
+        self.logger.info("Optimisation de la base de données...")
+        
+        # Dans un système réel, effectuer des opérations comme:
+        # - Reconstruction d'index
+        # - Vacuum/compactage
+        # - Analyse de statistiques
+        # - Optimisation de requêtes fréquentes
+        
+        # Simulation pour l'exemple
+        
+        # Publier une demande d'optimisation
+        self.event_bus.publish("database_optimization", {
+            "source": "flow_maintenance_ai",
+            "operations": ["vacuum", "reindex", "analyze"],
+            "timestamp": time.time()
+        })
+        
+        # Enregistrer l'action de maintenance
+        self._record_maintenance_action({
+            "type": "database_optimization",
+            "timestamp": time.time()
+        })
+    
+    def _optimize_memory_usage(self):
+        """Optimise l'utilisation de la mémoire"""
+        self.logger.info("Optimisation de l'utilisation mémoire...")
+        
+        # Dans un système réel, effectuer des opérations comme:
+        # - Libération de caches
+        # - Nettoyage d'objets temporaires
+        # - Compactage de structures de données
+        
+        # Simulation pour l'exemple
+        
+        # Publier une demande de nettoyage mémoire
+        self.event_bus.publish("memory_optimization", {
+            "source": "flow_maintenance_ai",
+            "level": "aggressive",
+            "timestamp": time.time()
+        })
+        
+        # Enregistrer l'action de maintenance
+        self._record_maintenance_action({
+            "type": "memory_optimization",
+            "timestamp": time.time()
+        })
+    
+    def _optimize_log_files(self):
+        """Optimise les fichiers logs"""
+        self.logger.info("Optimisation des fichiers logs...")
+        
+        # Dans un système réel, effectuer des opérations comme:
+        # - Rotation des logs
+        # - Compression des vieux logs
+        # - Suppression des logs expirés
+        
+        # Simulation pour l'exemple
+        retention_days = self.config["optimization"]["thresholds"]["log_retention_days"]
+        
+        # Publier une demande de nettoyage logs
+        self.event_bus.publish("log_maintenance", {
+            "source": "flow_maintenance_ai",
+            "operations": ["rotate", "compress", "cleanup"],
+            "retention_days": retention_days,
+            "timestamp": time.time()
+        })
+        
+        # Enregistrer l'action de maintenance
+        self._record_maintenance_action({
+            "type": "log_maintenance",
+            "retention_days": retention_days,
+            "timestamp": time.time()
+        })
+    
+    def _optimize_cache(self):
+        """Optimise les caches"""
+        self.logger.info("Optimisation des caches...")
+        
+        # Dans un système réel, effectuer des opérations comme:
+        # - Suppression des entrées expirées
+        # - Reconstruction des caches fréquemment utilisés
+        # - Ajustement des durées de vie
+        
+        # Simulation pour l'exemple
+        cache_expiry = self.config["optimization"]["thresholds"]["cache_expiry_hours"]
+        
+        # Publier une demande de nettoyage cache
+        self.event_bus.publish("cache_maintenance", {
+            "source": "flow_maintenance_ai",
+            "operations": ["clean_expired", "rebuild_frequent"],
+            "expiry_hours": cache_expiry,
+            "timestamp": time.time()
+        })
+        
+        # Enregistrer l'action de maintenance
+        self._record_maintenance_action({
+            "type": "cache_maintenance",
+            "expiry_hours": cache_expiry,
+            "timestamp": time.time()
+        })
+    
+    def _perform_deep_analysis(self):
+        """Effectue une analyse profonde du système"""
+        self.logger.info("Analyse profonde du système...")
+        
+        analysis_types = self.config["deep_analysis"]["analysis_types"]
+        max_time = self.config["deep_analysis"]["max_analysis_time_seconds"]
+        
+        # Initialiser les résultats
+        analysis_results = {}
+        
+        # Limiter le temps d'analyse
+        start_time = time.time()
+        
+        # Effectuer les analyses
+        for analysis_type in analysis_types:
+            # Vérifier le temps écoulé
+            if time.time() - start_time > max_time:
+                self.logger.warning(f"Temps maximum d'analyse atteint, arrêt de l'analyse")
+                break
+            
+            # Effectuer l'analyse
+            if analysis_type == "performance_patterns":
+                analysis_results["performance_patterns"] = self._analyze_performance_patterns()
+            elif analysis_type == "error_clusters":
+                analysis_results["error_clusters"] = self._analyze_error_clusters()
+            elif analysis_type == "resource_usage":
+                analysis_results["resource_usage"] = self._analyze_resource_usage()
+            elif analysis_type == "code_health":
+                analysis_results["code_health"] = self._analyze_code_health()
+        
+        # Mettre à jour les résultats de diagnostic
+        self.diagnostic_results = {
+            "analysis_results": analysis_results,
+            "timestamp": time.time()
+        }
+        
+        # Publier les résultats
+        self.event_bus.publish("deep_analysis_results", {
+            "analysis_types": list(analysis_results.keys()),
+            "completion_time": time.time() - start_time,
+            "issues_found": sum(len(results.get("issues", [])) for results in analysis_results.values()),
+            "recommendations": self._extract_recommendations(analysis_results),
+            "timestamp": time.time()
+        })
+    
+    def _analyze_performance_patterns(self) -> Dict[str, Any]:
+        """
+        Analyse les patterns de performance
+        
+        Returns:
+            Résultats de l'analyse
+        """
+        self.logger.info("Analyse des patterns de performance...")
+        
+        # Dans un système réel, analyser les données de performance historiques
+        # pour détecter des patterns, tendances, anomalies, etc.
+        
+        # Simulation pour l'exemple
+        return {
+            "patterns": [
+                {
+                    "type": "daily_peak",
+                    "description": "Pic d'activité quotidien entre 14h et 16h",
+                    "confidence": 0.85
+                },
+                {
+                    "type": "resource_correlation",
+                    "description": "Forte corrélation entre l'utilisation CPU et la latence réseau",
+                    "confidence": 0.78
+                }
+            ],
+            "anomalies": [
+                {
+                    "type": "response_time_spike",
+                    "module": "flow_bytebeat",
+                    "description": "Pics de latence sporadiques",
+                    "severity": "medium"
+                }
+            ],
+            "issues": [
+                {
+                    "id": "perf_pattern_1",
+                    "description": "Dégradation progressive des performances sur 3 jours",
+                    "affected_modules": ["flow_vision_market"],
+                    "severity": "warning"
+                }
+            ],
+            "recommendations": [
+                {
+                    "id": "perf_rec_1",
+                    "description": "Optimiser les requêtes de flow_vision_market",
+                    "expected_improvement": "30% de réduction de latence",
+                    "priority": "medium"
+                }
+            ]
+        }
+    
+    def _analyze_error_clusters(self) -> Dict[str, Any]:
+        """
+        Analyse les clusters d'erreurs
+        
+        Returns:
+            Résultats de l'analyse
+        """
+        self.logger.info("Analyse des clusters d'erreurs...")
+        
+        # Dans un système réel, analyser les journaux d'erreurs pour identifier
+        # des patterns, des erreurs communes, des causes racines, etc.
+        
+        # Simulation pour l'exemple
+        return {
+            "clusters": [
+                {
+                    "type": "connection_timeout",
+                    "count": 12,
+                    "modules": ["flow_bytebeat", "flow_sniper"],
+                    "pattern": "Connection timed out after * seconds",
+                    "first_occurrence": time.time() - 86400,
+                    "last_occurrence": time.time() - 3600
+                },
+                {
+                    "type": "data_validation",
+                    "count": 8,
+                    "modules": ["flow_market_predictor"],
+                    "pattern": "Invalid data format: expected *",
+                    "first_occurrence": time.time() - 43200,
+                    "last_occurrence": time.time() - 1800
+                }
+            ],
+            "trends": [
+                {
+                    "type": "increasing_errors",
+                    "module": "flow_market_predictor",
+                    "error_type": "data_validation",
+                    "growth_rate": "+15% par jour"
+                }
+            ],
+            "issues": [
+                {
+                    "id": "error_cluster_1",
+                    "description": "Erreurs de connexion répétées",
+                    "affected_modules": ["flow_bytebeat", "flow_sniper"],
+                    "severity": "warning"
+                }
+            ],
+            "recommendations": [
+                {
+                    "id": "error_rec_1",
+                    "description": "Augmenter le timeout de connexion à 30s",
+                    "expected_improvement": "Réduction de 90% des erreurs de timeout",
+                    "priority": "high"
+                }
+            ]
+        }
+    
+    def _analyze_resource_usage(self) -> Dict[str, Any]:
+        """
+        Analyse l'utilisation des ressources
+        
+        Returns:
+            Résultats de l'analyse
+        """
+        self.logger.info("Analyse de l'utilisation des ressources...")
+        
+        # Dans un système réel, analyser l'utilisation des ressources
+        # pour identifier des inefficacités, des fuites, etc.
+        
+        # Simulation pour l'exemple
+        return {
+            "resource_trends": [
+                {
+                    "resource": "memory",
+                    "trend": "increasing",
+                    "rate": "+2% par jour",
+                    "modules": ["flow_vision_market"]
+                },
+                {
+                    "resource": "disk",
+                    "trend": "stable",
+                    "rate": "0% par semaine"
+                }
+            ],
+            "inefficiencies": [
+                {
+                    "type": "cache_misuse",
+                    "module": "flow_horizon_scanner",
+                    "description": "Cache inefficace, taux de hit < 30%"
+                },
+                {
+                    "type": "disk_io",
+                    "module": "flow_risk_shield",
+                    "description": "I/O disque excessif, manque de buffering"
+                }
+            ],
+            "issues": [
+                {
+                    "id": "resource_issue_1",
+                    "description": "Suspicion de fuite mémoire dans flow_vision_market",
+                    "evidence": "Croissance constante de 2% par jour",
+                    "severity": "warning"
+                }
+            ],
+            "recommendations": [
+                {
+                    "id": "resource_rec_1",
+                    "description": "Optimiser la stratégie de cache de flow_horizon_scanner",
+                    "expected_improvement": "Réduction de 50% de l'utilisation mémoire",
+                    "priority": "medium"
+                }
+            ]
+        }
+    
+    def _analyze_code_health(self) -> Dict[str, Any]:
+        """
+        Analyse la santé du code
+        
+        Returns:
+            Résultats de l'analyse
+        """
+        self.logger.info("Analyse de la santé du code...")
+        
+        # Dans un système réel, analyser le code source pour identifier
+        # des problèmes de qualité, de sécurité, etc.
+        
+        # Simulation pour l'exemple
+        return {
+            "metrics": {
+                "cyclomatic_complexity": {
+                    "average": 12.3,
+                    "threshold": 15,
+                    "status": "ok"
+                },
+                "test_coverage": {
+                    "average": 76.5,
+                    "threshold": 80,
+                    "status": "warning"
+                },
+                "code_duplication": {
+                    "average": 8.2,
+                    "threshold": 10,
+                    "status": "ok"
+                }
+            },
+            "hotspots": [
+                {
+                    "module": "flow_bytebeat",
+                    "file": "strategy_executor.py",
+                    "lines": "120-150",
+                    "issue": "Complexité cyclomatique élevée (22)"
+                },
+                {
+                    "module": "flow_risk_shield",
+                    "file": "position_manager.py",
+                    "lines": "210-260",
+                    "issue": "Faible couverture de tests (45%)"
+                }
+            ],
+            "issues": [
+                {
+                    "id": "code_issue_1",
+                    "description": "Couverture de tests insuffisante",
+                    "affected_modules": ["flow_risk_shield"],
+                    "severity": "warning"
+                }
+            ],
+            "recommendations": [
+                {
+                    "id": "code_rec_1",
+                    "description": "Augmenter la couverture de tests de flow_risk_shield à au moins 80%",
+                    "expected_improvement": "Réduction des régressions",
+                    "priority": "high"
+                }
+            ]
+        }
+    
+    def _extract_recommendations(self, analysis_results: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Extrait les recommandations des résultats d'analyse
+        
+        Args:
+            analysis_results: Résultats d'analyse
+            
+        Returns:
+            Liste des recommandations
+        """
+        recommendations = []
+        
+        # Parcourir tous les résultats d'analyse
+        for analysis_type, results in analysis_results.items():
+            if "recommendations" in results:
+                for recommendation in results["recommendations"]:
+                    # Ajouter la source
+                    recommendation["source"] = analysis_type
+                    recommendations.append(recommendation)
+        
+        # Trier par priorité
+        priority_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+        recommendations.sort(key=lambda x: priority_order.get(x.get("priority", "low"), 3))
+        
+        return recommendations
+    
+    def _check_resource_thresholds(self):
+        """Vérifie les seuils de ressources"""
+        # Récupérer les ressources actuelles
+        resources = self.system_health.get("resources", {})
+        
+        # Vérifier la mémoire
+        memory_usage = resources.get("memory", 0)
+        memory_threshold = self.config["resource_management"]["memory_cleanup_threshold"]
+        
+        if memory_usage > memory_threshold:
+            self.logger.info(f"Seuil mémoire dépassé ({memory_usage:.1f}% > {memory_threshold}%), nettoyage...")
+            self._perform_memory_cleanup()
+        
+        # Vérifier le disque
+        disk_usage = resources.get("disk", 0)
+        disk_threshold = self.config["resource_management"]["disk_cleanup_threshold"]
+        
+        if disk_usage > disk_threshold:
+            self.logger.info(f"Seuil disque dépassé ({disk_usage:.1f}% > {disk_threshold}%), nettoyage...")
+            self._perform_disk_cleanup()
+        
+        # Vérifier le CPU
+        cpu_usage = resources.get("cpu", 0)
+        cpu_threshold = self.config["resource_management"]["cpu_throttling_threshold"]
+        
+        if cpu_usage > cpu_threshold:
+            self.logger.info(f"Seuil CPU dépassé ({cpu_usage:.1f}% > {cpu_threshold}%), limitation...")
+            self._reduce_cpu_usage()
+    
+    def _perform_memory_cleanup(self):
+        """Effectue un nettoyage mémoire"""
+        self.logger.info("Nettoyage mémoire...")
+        
+        # Publier une demande de nettoyage
+        self.event_bus.publish("memory_cleanup", {
+            "source": "flow_maintenance_ai",
+            "level": "aggressive",
+            "timestamp": time.time()
+        })
+        
+        # Enregistrer l'action de maintenance
+        self._record_maintenance_action({
+            "type": "memory_cleanup",
+            "timestamp": time.time()
+        })
+    
+    def _perform_disk_cleanup(self):
+        """Effectue un nettoyage disque"""
+        self.logger.info("Nettoyage disque...")
+        
+        # Publier une demande de nettoyage
+        self.event_bus.publish("disk_cleanup", {
+            "source": "flow_maintenance_ai",
+            "targets": ["logs", "temp", "cache"],
+            "timestamp": time.time()
+        })
+        
+        # Enregistrer l'action de maintenance
+        self._record_maintenance_action({
+            "type": "disk_cleanup",
+            "timestamp": time.time()
+        })
+    
+    def _reduce_cpu_usage(self):
+        """Réduit l'utilisation CPU"""
+        self.logger.info("Réduction de l'utilisation CPU...")
+        
+        # Publier une demande de limitation
+        self.event_bus.publish("cpu_throttling", {
+            "source": "flow_maintenance_ai",
+            "level": "moderate",
+            "timestamp": time.time()
+        })
+        
+        # Enregistrer l'action de maintenance
+        self._record_maintenance_action({
+            "type": "cpu_throttling",
+            "timestamp": time.time()
+        })
+    
+    def _perform_resource_cleanup(self):
+        """Effectue un nettoyage périodique des ressources"""
+        self.logger.info("Nettoyage périodique des ressources...")
+        
+        # Nettoyage mémoire léger
+        self.event_bus.publish("memory_cleanup", {
+            "source": "flow_maintenance_ai",
+            "level": "light",
+            "timestamp": time.time()
+        })
+        
+        # Nettoyage disque léger
+        self.event_bus.publish("disk_cleanup", {
+            "source": "flow_maintenance_ai",
+            "targets": ["temp"],
+            "timestamp": time.time()
+        })
+        
+        # Enregistrer l'action de maintenance
+        self._record_maintenance_action({
+            "type": "periodic_cleanup",
+            "timestamp": time.time()
+        })
+    
+    def _create_system_alert(self, alert_data: Dict[str, Any]):
+        """
+        Crée une alerte système
+        
+        Args:
+            alert_data: Données de l'alerte
+        """
+        # Ajouter la source
+        alert_data["source"] = "flow_maintenance_ai"
+        
+        # Publier l'alerte
+        self.event_bus.publish("system_alert", alert_data)
+    
+    def _record_maintenance_action(self, action_data: Dict[str, Any]):
+        """
+        Enregistre une action de maintenance
+        
+        Args:
+            action_data: Données de l'action
+        """
+        # Ajouter à l'historique
+        self.maintenance_history.append(action_data)
+        
+        # Limiter la taille de l'historique
+        max_history = 100
+        if len(self.maintenance_history) > max_history:
+            self.maintenance_history = self.maintenance_history[-max_history:]
+    
+    def _handle_system_status(self, data: Dict[str, Any]):
+        """
+        Gestionnaire pour les rapports d'état système
+        
+        Args:
+            data: Rapport d'état
+        """
+        # Mettre à jour l'état du système
+        self.system_health = {
+            "global_status": data.get("system_status", "unknown"),
+            "modules_status": data.get("modules", {}),
+            "resources": data.get("resources", {}),
+            "last_check": time.time()
+        }
+        
+        # Déclencher une vérification de santé si le statut n'est pas "healthy"
+        if data.get("system_status") != "healthy":
+            self._detect_health_issues()
+    
+    def _handle_system_alert(self, data: Dict[str, Any]):
+        """
+        Gestionnaire pour les alertes système
+        
+        Args:
+            data: Alerte système
+        """
+        # Extraire les informations pertinentes
+        alert_type = data.get("type", "unknown")
+        severity = data.get("severity", "warning")
+        
+        self.logger.info(f"Alerte système reçue: {alert_type} ({severity})")
+        
+        # Traiter l'alerte en fonction de son type
+        if alert_type == "module_failure":
+            module = data.get("module")
+            
+            if module:
+                # Ajouter un problème
+                self.detected_issues.append({
+                    "id": f"module_failure_{module}_{int(time.time())}",
+                    "type": "module_status",
+                    "module": module,
+                    "description": f"Défaillance du module {module}: {data.get('description', 'erreur inconnue')}",
+                    "severity": severity,
+                    "timestamp": time.time()
+                })
+                
+                # Traiter le problème si critique
+                if severity == "critical" and self.config["self_healing"]["enabled"]:
+                    self._heal_module_issue(self.detected_issues[-1])
+        
+        elif alert_type == "resource_critical":
+            resource = data.get("resource")
+            
+            if resource:
+                # Ajouter un problème
+                self.detected_issues.append({
+                    "id": f"resource_critical_{resource}_{int(time.time())}",
+                    "type": "resource_usage",
+                    "resource": resource,
+                    "description": f"Utilisation critique de {resource}: {data.get('description', 'problème inconnu')}",
+                    "severity": severity,
+                    "timestamp": time.time()
+                })
+                
+                # Traiter le problème si critique
+                if severity == "critical" and self.config["self_healing"]["enabled"]:
+                    self._heal_resource_issue(self.detected_issues[-1])
+    
+    def _handle_module_status_change(self, data: Dict[str, Any]):
+        """
+        Gestionnaire pour les changements d'état des modules
+        
+        Args:
+            data: Changement d'état
+        """
+        # Extraire les informations
+        module = data.get("module")
+        status = data.get("status")
+        previous_status = data.get("previous_status")
+        
+        if not module or not status:
+            return
+        
+        self.logger.debug(f"Changement d'état du module {module}: {previous_status} -> {status}")
+        
+        # Mettre à jour l'état du module
+        if module in self.modules_health:
+            self.modules_health[module]["status"] = status
+            self.modules_health[module]["last_change"] = time.time()
+        
+        # Traiter les transitions particulières
+        if previous_status == "running" and status in ["inactive", "failed"]:
+            # Vérifier si le module est critique
+            if module in self.config["health_check"]["critical_modules"]:
+                self.logger.warning(f"Module critique {module} est passé de {previous_status} à {status}")
+                
+                # Ajouter un problème
+                self.detected_issues.append({
+                    "id": f"module_transition_{module}_{int(time.time())}",
+                    "type": "module_status",
+                    "module": module,
+                    "description": f"Module critique {module} est devenu {status}",
+                    "severity": "critical",
+                    "timestamp": time.time()
+                })
+                
+                # Traiter le problème si auto-réparation activée
+                if self.config["self_healing"]["enabled"]:
+                    self._heal_module_issue(self.detected_issues[-1])
+    
+    def _handle_performance_metrics(self, data: Dict[str, Any]):
+        """
+        Gestionnaire pour les métriques de performance
+        
+        Args:
+            data: Métriques de performance
+        """
+        # Extraire les métriques
+        metrics = data.get("metrics", {})
+        module = data.get("module")
+        
+        # Si le module est spécifié, mettre à jour ses métriques
+        if module and module in self.modules_health:
+            if "performance" not in self.modules_health[module]:
+                self.modules_health[module]["performance"] = {}
+            
+            # Mettre à jour les métriques
+            self.modules_health[module]["performance"].update(metrics)
+        
+        # Détecter les anomalies de performance
+        self._detect_performance_anomalies(metrics, module)
+    
+    def _detect_performance_anomalies(self, metrics: Dict[str, Any], module: Optional[str] = None):
+        """
+        Détecte les anomalies de performance
+        
+        Args:
+            metrics: Métriques de performance
+            module: Module concerné (optionnel)
+        """
+        # Vérifier les métriques clés
+        for metric_name, value in metrics.items():
+            # Vérifier le taux d'erreur
+            if metric_name == "error_rate" and isinstance(value, (int, float)):
+                error_threshold = self.config["health_check"]["thresholds"]["error_rate_percent"] / 100
+                
+                if value > error_threshold:
+                    # Anomalie détectée
+                    self.logger.warning(f"Taux d'erreur élevé {value:.2%} > {error_threshold:.2%}{' pour ' + module if module else ''}")
+                    
+                    # Ajouter un problème
+                    self.detected_issues.append({
+                        "id": f"high_error_rate_{int(time.time())}",
+                        "type": "performance",
+                        "metric": "error_rate",
+                        "value": value,
+                        "threshold": error_threshold,
+                        "module": module,
+                        "description": f"Taux d'erreur élevé: {value:.2%} > {error_threshold:.2%}{' pour ' + module if module else ''}",
+                        "severity": "warning" if value < error_threshold * 2 else "critical",
+                        "timestamp": time.time()
+                    })
+            
+            # Vérifier le temps de réponse
+            elif metric_name == "response_time" and isinstance(value, (int, float)):
+                response_threshold = self.config["health_check"]["thresholds"]["response_time_ms"]
+                
+                if value > response_threshold:
+                    # Anomalie détectée
+                    self.logger.warning(f"Temps de réponse élevé {value:.2f}ms > {response_threshold}ms{' pour ' + module if module else ''}")
+                    
+                    # Ajouter un problème
+                    self.detected_issues.append({
+                        "id": f"high_response_time_{int(time.time())}",
+                        "type": "performance",
+                        "metric": "response_time",
+                        "value": value,
+                        "threshold": response_threshold,
+                        "module": module,
+                        "description": f"Temps de réponse élevé: {value:.2f}ms > {response_threshold}ms{' pour ' + module if module else ''}",
+                        "severity": "warning" if value < response_threshold * 2 else "critical",
+                        "timestamp": time.time()
+                    })
+    
+    def _handle_error_report(self, data: Dict[str, Any]):
+        """
+        Gestionnaire pour les rapports d'erreurs
+        
+        Args:
+            data: Rapport d'erreur
+        """
+        # Extraire les informations
+        error_type = data.get("type", "unknown")
+        module = data.get("module")
+        severity = data.get("severity", "error")
+        message = data.get("message", "")
+        
+        if not module:
+            return
+        
+        self.logger.debug(f"Erreur dans {module}: {error_type} - {message}")
+        
+        # Ajouter à l'historique du module
+        if module in self.modules_health:
+            if "errors" not in self.modules_health[module]:
+                self.modules_health[module]["errors"] = []
+            
+            self.modules_health[module]["errors"].append({
+                "type": error_type,
+                "message": message,
+                "severity": severity,
+                "timestamp": time.time()
+            })
+            
+            # Limiter la taille de l'historique
+            max_errors = 20
+            if len(self.modules_health[module]["errors"]) > max_errors:
+                self.modules_health[module]["errors"] = self.modules_health[module]["errors"][-max_errors:]
+        
+        # Traiter les erreurs critiques
+        if severity == "critical":
+            # Ajouter un problème
+            self.detected_issues.append({
+                "id": f"critical_error_{module}_{int(time.time())}",
+                "type": "error",
+                "error_type": error_type,
+                "module": module,
+                "description": f"Erreur critique dans {module}: {message}",
+                "severity": "critical",
+                "timestamp": time.time()
+            })
+            
+            # Traiter le problème si auto-réparation activée
+            if self.config["self_healing"]["enabled"]:
+                self._heal_module_issue(self.detected_issues[-1])
+    
+    def _handle_diagnostic_request(self, data: Dict[str, Any]):
+        """
+        Gestionnaire pour les demandes de diagnostic
+        
+        Args:
+            data: Demande de diagnostic
+        """
+        # Extraire les informations
+        request_id = data.get("request_id", f"diag_{int(time.time())}")
+        target = data.get("target", "system")
+        
+        self.logger.info(f"Demande de diagnostic pour {target} (ID: {request_id})")
+        
+        # Effectuer le diagnostic
+        diagnostic_result = self._perform_diagnostic(target)
+        
+        # Répondre à la demande
+        self.event_bus.publish("diagnostic_response", {
+            "request_id": request_id,
+            "target": target,
+            "result": diagnostic_result,
+            "timestamp": time.time()
+        })
+    
+    def _perform_diagnostic(self, target: str) -> Dict[str, Any]:
+        """
+        Effectue un diagnostic
+        
+        Args:
+            target: Cible du diagnostic (module ou "system")
+            
+        Returns:
+            Résultat du diagnostic
+        """
+        if target == "system":
+            # Diagnostic système
+            return self._perform_system_diagnostic()
+        else:
+            # Diagnostic d'un module
+            return self._perform_module_diagnostic(target)
+    
+    def _perform_system_diagnostic(self) -> Dict[str, Any]:
+        """
+        Effectue un diagnostic système
+        
+        Returns:
+            Résultat du diagnostic
+        """
+        self.logger.info("Diagnostic système en cours...")
+        
+        # Récupérer l'état du système
+        system_data = self._get_system_status()
+        
+        # Collecter les problèmes actifs
+        active_issues = [issue for issue in self.detected_issues if time.time() - issue["timestamp"] < 3600]
+        
+        # Collecter les actions de maintenance récentes
+        recent_actions = [action for action in self.maintenance_history if time.time() - action["timestamp"] < 3600]
+        
+        # Vérifier les ressources
+        resources = system_data.get("resources", {})
+        resource_status = {
+            "cpu": "healthy" if resources.get("cpu", 0) < self.config["health_check"]["thresholds"]["cpu_usage_percent"] else "warning",
+            "memory": "healthy" if resources.get("memory", 0) < self.config["health_check"]["thresholds"]["memory_usage_percent"] else "warning",
+            "disk": "healthy" if resources.get("disk", 0) < self.config["health_check"]["thresholds"]["disk_usage_percent"] else "warning"
+        }
+        
+        # Vérifier les modules critiques
+        critical_modules = self.config["health_check"]["critical_modules"]
+        modules_status = system_data.get("modules", {}).get("details", {})
+        
+        critical_modules_status = {
+            module: modules_status.get(module, {}).get("status", "unknown")
+            for module in critical_modules
+        }
+        
+        # Déterminer le statut global
+        if "critical" in resource_status.values() or "failed" in critical_modules_status.values():
+            global_health = "critical"
+        elif "warning" in resource_status.values() or "inactive" in critical_modules_status.values():
+            global_health = "degraded"
+        else:
+            global_health = "healthy"
+        
+        # Générer des recommandations
+        recommendations = []
+        
+        for issue in active_issues:
+            if issue["type"] == "resource_usage" and issue["resource"] == "memory":
+                recommendations.append({
+                    "id": "diag_rec_1",
+                    "description": "Effectuer un nettoyage mémoire",
+                    "action": "memory_cleanup",
+                    "priority": issue["severity"]
+                })
+            elif issue["type"] == "module_status":
+                recommendations.append({
+                    "id": "diag_rec
