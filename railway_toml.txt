@@ -1,31 +1,10 @@
 [build]
-builder = "nixpacks"
-buildCommand = "pip install --upgrade pip && pip install -r requirements.txt"
+builder = "DOCKERFILE"
+dockerfile = "Dockerfile"
 
 [deploy]
-startCommand = "uvicorn main:app --host 0.0.0.0 --port $PORT --workers 2"
-healthcheckPath = "/status"
-healthcheckTimeout = 150
-restartPolicyType = "on-failure"
-restartPolicyMaxRetries = 5
 numReplicas = 1
-
-[metrics]
-path = "/metrics"
-port = "$PORT"
-
-[service]
-internal_port = "$PORT"
-auto_rollback = true
-
-[env]
-MODE_SANDBOX = { default = "true" }
-LOG_LEVEL = { default = "INFO" }
-REQUEST_TIMEOUT_SECONDS = { default = "30" }
-MAX_CONCURRENT_OPERATIONS = { default = "5" }
-FLOWBYTEBEAT_MAX_LEVERAGE = { default = "10.0" }
-FLOWBYTEBEAT_DEFAULT_TIMEFRAME = { default = "1h" }
-FLOWSNIPER_MAX_ENTRIES = { default = "3" }
-FLOWSNIPER_DEFAULT_SLIPPAGE = { default = "0.05" }
-FLOWUPSPIN_DEFAULT_TRADE_SIZE = { default = "0.01" }
-FLOWUPSPIN_SMART_EXIT = { default = "true" }
+healthcheckPath = "/status"
+healthcheckTimeout = 300
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
