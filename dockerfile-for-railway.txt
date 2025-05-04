@@ -1,20 +1,25 @@
-FROM python:3.9-slim
+FROM python:3.8-slim
 
 WORKDIR /app
 
-# Installer les dépendances système nécessaires
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copier les fichiers de requirements et installer les dépendances
+# Installer les dépendances de base
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Si les modules spécifiques sont nécessaires, les installer individuellement
+# avec des versions précises pour éviter les conflits
+RUN pip install --no-cache-dir \
+    python-binance==1.0.15 \
+    ccxt==1.93.43 \
+    pybit==2.4.0 \
+    pandas==1.3.5 \
+    numpy==1.21.6 \
+    ta==0.9.0
 
 # Copier le reste du code
 COPY . .
 
-# Exposer le port utilisé par l'application
+# Exposer le port
 EXPOSE 8000
 
 # Commande pour exécuter l'application
