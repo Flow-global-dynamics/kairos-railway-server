@@ -1,13 +1,13 @@
-Cython
+--use-pep517
 fastapi==0.103.1
 uvicorn==0.23.2
 python-dotenv==1.0.0
 pydantic==2.3.0
 python-binance==1.0.19
-ccxt==3.0.79
-pybit==5.0.0
+ccxt==3.0.69
+cybifts==0.0
 pandas==1.5.3
-numpy==1.25.2
+numpy==1.23.5
 loguru==0.7.0
 python-multipart==0.0.6
 httpx==0.24.1
